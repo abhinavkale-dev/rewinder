@@ -1,7 +1,25 @@
+use std::sync::Arc;
+
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
 
 use crate::core::state::{ClipMetadataDto, EngineStateDto};
+use crate::hotkeys::HotkeyRegistration;
+
+pub trait EngineHost: Send + Sync {
+    fn emit(&self, event: &str, payload: serde_json::Value);
+    fn replace_shortcuts(
+        &self,
+        primary: &str,
+        fallbacks: &[String],
+    ) -> Result<HotkeyRegistration, String>;
+}
+
+fn emit_payload<T: Serialize>(app: &Arc<dyn EngineHost>, event: &str, payload: T) {
+    app.emit(
+        event,
+        serde_json::to_value(payload).unwrap_or(serde_json::Value::Null),
+    );
+}
 
 pub const ENGINE_STATE_CHANGED: &str = "rewinder://engine-state-changed";
 pub const CLIP_SAVED: &str = "rewinder://clip-saved";
@@ -102,21 +120,20 @@ pub struct PerfGuardTransitionPayload {
     pub sampled_at_epoch_ms: i64,
 }
 
-pub fn emit_engine_state(app: &AppHandle, state: &EngineStateDto) {
-    let _ = app.emit(ENGINE_STATE_CHANGED, state);
-    crate::update_tray_labels(app, state);
+pub fn emit_engine_state(app: &Arc<dyn EngineHost>, state: &EngineStateDto) {
+    emit_payload(app, ENGINE_STATE_CHANGED, state);
 }
 
-pub fn emit_clip_saved(app: &AppHandle, clip: &ClipMetadataDto) {
-    let _ = app.emit(CLIP_SAVED, clip);
+pub fn emit_clip_saved(app: &Arc<dyn EngineHost>, clip: &ClipMetadataDto) {
+    emit_payload(app, CLIP_SAVED, clip);
 }
 
-pub fn emit_save_failed(app: &AppHandle, message: impl Into<String>) {
+pub fn emit_save_failed(app: &Arc<dyn EngineHost>, message: impl Into<String>) {
     emit_save_failed_code(app, "unknown", message, Option::<String>::None);
 }
 
 pub fn emit_save_failed_code(
-    app: &AppHandle,
+    app: &Arc<dyn EngineHost>,
     code: impl Into<String>,
     message: impl Into<String>,
     action: Option<String>,
@@ -126,20 +143,20 @@ pub fn emit_save_failed_code(
         code: Some(code.into()),
         action,
     };
-    let _ = app.emit(SAVE_FAILED, payload);
+    emit_payload(app, SAVE_FAILED, payload);
 }
 
-pub fn emit_save_deferred(app: &AppHandle, message: impl Into<String>) {
+pub fn emit_save_deferred(app: &Arc<dyn EngineHost>, message: impl Into<String>) {
     let payload = ErrorPayload {
         message: message.into(),
         code: Some("deferred".to_string()),
         action: None,
     };
-    let _ = app.emit(SAVE_DEFERRED, payload);
+    emit_payload(app, SAVE_DEFERRED, payload);
 }
 
 pub fn emit_save_warning(
-    app: &AppHandle,
+    app: &Arc<dyn EngineHost>,
     code: impl Into<String>,
     message: impl Into<String>,
     action: Option<String>,
@@ -149,10 +166,10 @@ pub fn emit_save_warning(
         code: Some(code.into()),
         action,
     };
-    let _ = app.emit(SAVE_WARNING, payload);
+    emit_payload(app, SAVE_WARNING, payload);
 }
 
-pub fn emit_permission_required(app: &AppHandle, message: impl Into<String>) {
+pub fn emit_permission_required(app: &Arc<dyn EngineHost>, message: impl Into<String>) {
     let payload = ErrorPayload {
         message: message.into(),
         code: Some("permission_required".to_string()),
@@ -161,25 +178,25 @@ pub fn emit_permission_required(app: &AppHandle, message: impl Into<String>) {
                 .to_string(),
         ),
     };
-    let _ = app.emit(PERMISSION_REQUIRED, payload);
+    emit_payload(app, PERMISSION_REQUIRED, payload);
 }
 
-pub fn emit_hotkey_triggered(app: &AppHandle, hotkey: impl Into<String>) {
+pub fn emit_hotkey_triggered(app: &Arc<dyn EngineHost>, hotkey: impl Into<String>) {
     let payload = HotkeyPayload {
         hotkey: hotkey.into(),
     };
-    let _ = app.emit(HOTKEY_TRIGGERED, payload);
+    emit_payload(app, HOTKEY_TRIGGERED, payload);
 }
 
-pub fn emit_settings_updated(app: &AppHandle, message: impl Into<String>) {
+pub fn emit_settings_updated(app: &Arc<dyn EngineHost>, message: impl Into<String>) {
     let payload = SettingsUpdatedPayload {
         message: message.into(),
     };
-    let _ = app.emit(SETTINGS_UPDATED, payload);
+    emit_payload(app, SETTINGS_UPDATED, payload);
 }
 
 pub fn emit_capture_health_changed(
-    app: &AppHandle,
+    app: &Arc<dyn EngineHost>,
     health: impl Into<String>,
     reason: Option<String>,
 ) {
@@ -187,44 +204,44 @@ pub fn emit_capture_health_changed(
         health: health.into(),
         reason,
     };
-    let _ = app.emit(CAPTURE_HEALTH_CHANGED, payload);
+    emit_payload(app, CAPTURE_HEALTH_CHANGED, payload);
 }
 
-pub fn emit_hotkey_conflict(app: &AppHandle, message: impl Into<String>, action: Option<String>) {
+pub fn emit_hotkey_conflict(app: &Arc<dyn EngineHost>, message: impl Into<String>, action: Option<String>) {
     let payload = ErrorPayload {
         message: message.into(),
         code: Some("hotkey_conflict".to_string()),
         action,
     };
-    let _ = app.emit(HOTKEY_CONFLICT, payload);
+    emit_payload(app, HOTKEY_CONFLICT, payload);
 }
 
-pub fn emit_capture_restarted(app: &AppHandle, reason: impl Into<String>) {
+pub fn emit_capture_restarted(app: &Arc<dyn EngineHost>, reason: impl Into<String>) {
     let payload = CaptureRestartedPayload {
         reason: reason.into(),
     };
-    let _ = app.emit(CAPTURE_RESTARTED, payload);
+    emit_payload(app, CAPTURE_RESTARTED, payload);
 }
 
-pub fn emit_audio_mode_changed(app: &AppHandle, mode: impl Into<String>, reason: Option<String>) {
+pub fn emit_audio_mode_changed(app: &Arc<dyn EngineHost>, mode: impl Into<String>, reason: Option<String>) {
     let payload = AudioModePayload {
         mode: mode.into(),
         reason,
     };
-    let _ = app.emit(AUDIO_MODE_CHANGED, payload);
+    emit_payload(app, AUDIO_MODE_CHANGED, payload);
 }
 
-pub fn emit_capture_degraded(app: &AppHandle, message: impl Into<String>) {
+pub fn emit_capture_degraded(app: &Arc<dyn EngineHost>, message: impl Into<String>) {
     let payload = ErrorPayload {
         message: message.into(),
         code: Some("capture_degraded".to_string()),
         action: Some("Capture auto-degraded to keep replay active.".to_string()),
     };
-    let _ = app.emit(CAPTURE_DEGRADED, payload);
+    emit_payload(app, CAPTURE_DEGRADED, payload);
 }
 
 pub fn emit_capture_profile_changed(
-    app: &AppHandle,
+    app: &Arc<dyn EngineHost>,
     from: impl Into<String>,
     to: impl Into<String>,
     reason: impl Into<String>,
@@ -234,11 +251,11 @@ pub fn emit_capture_profile_changed(
         to: to.into(),
         reason: reason.into(),
     };
-    let _ = app.emit(CAPTURE_PROFILE_CHANGED, payload);
+    emit_payload(app, CAPTURE_PROFILE_CHANGED, payload);
 }
 
 pub fn emit_capture_profile_recovered(
-    app: &AppHandle,
+    app: &Arc<dyn EngineHost>,
     from: impl Into<String>,
     to: impl Into<String>,
     reason: impl Into<String>,
@@ -248,43 +265,43 @@ pub fn emit_capture_profile_recovered(
         to: to.into(),
         reason: reason.into(),
     };
-    let _ = app.emit(CAPTURE_PROFILE_RECOVERED, payload);
+    emit_payload(app, CAPTURE_PROFILE_RECOVERED, payload);
 }
 
-pub fn emit_capture_paused(app: &AppHandle, message: impl Into<String>) {
+pub fn emit_capture_paused(app: &Arc<dyn EngineHost>, message: impl Into<String>) {
     let payload = ErrorPayload {
         message: message.into(),
         code: Some("capture_paused".to_string()),
         action: Some("Click Resume Capture to continue.".to_string()),
     };
-    let _ = app.emit(CAPTURE_PAUSED, payload);
+    emit_payload(app, CAPTURE_PAUSED, payload);
 }
 
-pub fn emit_capture_resumed(app: &AppHandle, message: impl Into<String>) {
+pub fn emit_capture_resumed(app: &Arc<dyn EngineHost>, message: impl Into<String>) {
     let payload = ErrorPayload {
         message: message.into(),
         code: Some("capture_resumed".to_string()),
         action: None,
     };
-    let _ = app.emit(CAPTURE_RESUMED, payload);
+    emit_payload(app, CAPTURE_RESUMED, payload);
 }
 
-pub fn emit_audio_path_failed(app: &AppHandle, message: impl Into<String>, action: Option<String>) {
+pub fn emit_audio_path_failed(app: &Arc<dyn EngineHost>, message: impl Into<String>, action: Option<String>) {
     let payload = ErrorPayload {
         message: message.into(),
         code: Some("audio_required_unavailable".to_string()),
         action,
     };
-    let _ = app.emit(AUDIO_PATH_FAILED, payload);
+    emit_payload(app, AUDIO_PATH_FAILED, payload);
 }
 
-pub fn emit_audio_path_ready(app: &AppHandle, mode: impl Into<String>) {
+pub fn emit_audio_path_ready(app: &Arc<dyn EngineHost>, mode: impl Into<String>) {
     let payload = AudioPathReadyPayload { mode: mode.into() };
-    let _ = app.emit(AUDIO_PATH_READY, payload);
+    emit_payload(app, AUDIO_PATH_READY, payload);
 }
 
 pub fn emit_mic_path_degraded(
-    app: &AppHandle,
+    app: &Arc<dyn EngineHost>,
     code: impl Into<String>,
     message: impl Into<String>,
     action: Option<String>,
@@ -294,20 +311,20 @@ pub fn emit_mic_path_degraded(
         code: Some(code.into()),
         action,
     };
-    let _ = app.emit(MIC_PATH_DEGRADED, payload);
+    emit_payload(app, MIC_PATH_DEGRADED, payload);
 }
 
-pub fn emit_mic_path_recovered(app: &AppHandle, message: impl Into<String>) {
+pub fn emit_mic_path_recovered(app: &Arc<dyn EngineHost>, message: impl Into<String>) {
     let payload = ErrorPayload {
         message: message.into(),
         code: Some("mic_recovered".to_string()),
         action: None,
     };
-    let _ = app.emit(MIC_PATH_RECOVERED, payload);
+    emit_payload(app, MIC_PATH_RECOVERED, payload);
 }
 
 pub fn emit_mic_permission_changed(
-    app: &AppHandle,
+    app: &Arc<dyn EngineHost>,
     status: impl Into<String>,
     message: Option<String>,
 ) {
@@ -315,9 +332,9 @@ pub fn emit_mic_permission_changed(
         status: status.into(),
         message,
     };
-    let _ = app.emit(MIC_PERMISSION_CHANGED, payload);
+    emit_payload(app, MIC_PERMISSION_CHANGED, payload);
 }
 
-pub fn emit_perf_guard_transition(app: &AppHandle, payload: PerfGuardTransitionPayload) {
-    let _ = app.emit(PERF_GUARD_TRANSITION, payload);
+pub fn emit_perf_guard_transition(app: &Arc<dyn EngineHost>, payload: PerfGuardTransitionPayload) {
+    emit_payload(app, PERF_GUARD_TRANSITION, payload);
 }

@@ -63,5 +63,4 @@ fn build_screencapturekit_helper() {
 fn main() {
     #[cfg(target_os = "macos")]
     build_screencapturekit_helper();
-    tauri_build::build()
 }
