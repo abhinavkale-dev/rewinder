@@ -1,0 +1,20 @@
+# Config for regenerating include/rewinder_ffi.h from src/ffi.rs:
+#   cbindgen --config cbindgen.toml --output include/rewinder_ffi.h
+language = "C"
+include_guard = "REWINDER_FFI_H"
+cpp_compat = true
+include_version = false
+documentation = true
+documentation_style = "c"
+
+[parse]
+parse_deps = false
+
+[export]
+include = ["RewinderHandle", "RewinderEventCallback"]
+
+[fn]
+prefix = ""
+
+[macro_expansion]
+bitflags = false
