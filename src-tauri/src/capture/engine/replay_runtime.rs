@@ -78,8 +78,6 @@ impl CaptureEngine {
         let mut discontinuity_gap_ms: Option<u64> = None;
         let mut partial_reason: Option<String> = None;
         let mut partial_reason_code: Option<String> = None;
-        // OSS-REF(replay_window): keep replay selection anchored to the hotkey moment
-        // and stop exactly at the first continuity break (session boundary or media gap).
         for idx in (0..anchor_index).rev() {
             let candidate = &entries[idx];
             if anchor_is_active && candidate.session_id.as_deref() != Some(active_session_id) {
@@ -154,8 +152,6 @@ impl CaptureEngine {
         let mut target_trim_secs = requested_secs
             .min(selected_secs)
             .max(self.segment_duration_secs);
-        // Keep trim targets aligned to contiguous segment windows when we're already
-        // near the boundary to avoid aggressive edge trims.
         let near_window_boundary =
             (selected_secs - target_trim_secs) <= (self.segment_duration_secs * 0.5);
         if near_window_boundary {
@@ -303,64 +299,115 @@ impl CaptureEngine {
             .unwrap_or(false)
     }
 
+    fn log_metrics(&self) -> parking_lot::MutexGuard<'_, LogMetricsCache> {
+        let mut cache = self.log_metrics.lock();
+        let stale = cache
+            .last_refresh_at
+            .map(|at| at.elapsed() >= Duration::from_millis(LOG_METRICS_REFRESH_INTERVAL_MS))
+            .unwrap_or(true);
+        if stale {
+            let attempt_offset = self.capture_log_offset.load(Ordering::Relaxed);
+            let window = if cache.last_refresh_at.is_none() {
+                read_capture_log_from_offset(&self.capture_log_path, attempt_offset)
+            } else {
+                read_capture_log_tail_window(&self.capture_log_path, attempt_offset)
+            };
+            if let Some(window) = window {
+                refresh_log_metrics_from_window(&mut cache, &window);
+            }
+            cache.last_refresh_at = Some(Instant::now());
+            self.rotate_capture_log_if_oversized();
+        }
+        cache
+    }
+
+    fn rotate_capture_log_if_oversized(&self) {
+        let size = capture_log_size(&self.capture_log_path);
+        if size <= CAPTURE_LOG_ROTATE_BYTES {
+            return;
+        }
+        let Some(kept_tail) =
+            read_capture_log_tail_bytes(&self.capture_log_path, CAPTURE_LOG_ROTATE_KEEP_BYTES)
+        else {
+            return;
+        };
+        let rewrite = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&self.capture_log_path)
+            .and_then(|mut file| file.write_all(kept_tail.as_bytes()));
+        if rewrite.is_err() {
+            return;
+        }
+        self.capture_log_offset.store(0, Ordering::Relaxed);
+        append_capture_log_line(
+            &self.capture_log_path,
+            &format!(
+                "phase: log_rotated dropped_bytes={} kept_bytes={}",
+                size.saturating_sub(kept_tail.len() as u64),
+                kept_tail.len()
+            ),
+        );
+    }
+
     pub fn first_audio_frame_seen(&self) -> bool {
-        has_first_audio_frame_marker_in_log(&self.capture_log_path)
+        self.log_metrics().first_audio_frame_seen
     }
 
     pub fn system_audio_path_ready(&self) -> bool {
         if !self.active_audio_mode.has_audio() {
             return false;
         }
-        has_first_system_audio_frame_marker_in_log(&self.capture_log_path)
+        self.log_metrics().system_audio_path_ready
     }
 
     pub fn mic_path_ready(&self) -> bool {
         if !self.active_audio_mode.has_mic() {
             return false;
         }
-        has_mic_path_ready_marker_in_log(&self.capture_log_path)
+        self.log_metrics().mic_path_ready
     }
 
     pub fn mic_frames_seen(&self) -> bool {
         if !self.active_audio_mode.has_mic() {
             return false;
         }
-        has_first_mic_audio_frame_marker_in_log(&self.capture_log_path)
+        self.log_metrics().mic_frames_seen
     }
 
     pub fn mic_level_dbfs(&self) -> Option<f32> {
         if !self.active_audio_mode.has_mic() {
             return None;
         }
-        read_latest_mic_level_dbfs(&self.capture_log_path)
+        self.log_metrics().mic_level_dbfs
     }
 
     pub fn mic_capture_session_running(&self) -> bool {
         if !self.active_audio_mode.has_mic() {
             return false;
         }
-        has_mic_capture_session_running_marker_in_log(&self.capture_log_path)
+        self.log_metrics().mic_capture_session_running
     }
 
     pub fn mic_samples_per_sec(&self) -> Option<u32> {
         if !self.active_audio_mode.has_mic() {
             return None;
         }
-        read_latest_mic_samples_per_sec(&self.capture_log_path)
+        self.log_metrics().mic_samples_per_sec
     }
 
     pub fn mic_attach_runtime_state(&self) -> Option<MicAttachRuntimeState> {
         if !self.active_audio_mode.has_mic() {
             return None;
         }
-        read_latest_mic_attach_runtime_state(&self.capture_log_path)
+        self.log_metrics().mic_attach_runtime_state
     }
 
     pub fn mic_sustained_silence(&self) -> bool {
         if !self.active_audio_mode.has_mic() {
             return false;
         }
-        has_mic_sustained_silence_marker_in_log(&self.capture_log_path)
+        self.log_metrics().mic_sustained_silence
     }
 
     pub fn audio_path_ready(&self) -> bool {
@@ -372,58 +419,55 @@ impl CaptureEngine {
     }
 
     pub fn capture_speed_x(&self) -> Option<f32> {
-        read_capture_speed_x_since(&self.capture_log_path, self.capture_log_offset)
+        self.log_metrics().capture_speed_x
     }
 
     pub fn effective_output_fps(&self) -> Option<f32> {
-        read_latest_video_output_fps(&self.capture_log_path)
+        self.log_metrics().video_output_fps
     }
 
     pub fn capture_dropped_frames(&self) -> u64 {
-        read_latest_video_frame_drop_total(&self.capture_log_path).unwrap_or(0)
+        self.log_metrics().video_frame_drop_total.unwrap_or(0)
     }
 
     pub fn capture_queue_overflows(&self) -> u64 {
-        read_latest_video_queue_overflow_count(&self.capture_log_path).unwrap_or(0)
+        self.log_metrics().video_queue_overflow_count.unwrap_or(0)
     }
 
     pub fn system_memory_pressure_level(&self) -> Option<String> {
-        read_latest_system_memory_pressure_level(&self.capture_log_path)
+        self.log_metrics().system_memory_pressure_level.clone()
     }
 
     pub fn helper_thermal_state(&self) -> Option<String> {
-        read_latest_helper_thermal_state(&self.capture_log_path)
+        self.log_metrics().helper_thermal_state.clone()
     }
 
     pub fn mic_recovery_state(&self) -> Option<String> {
         if !self.active_audio_mode.has_mic() {
             return None;
         }
-        read_latest_mic_recovery_state(&self.capture_log_path)
+        self.log_metrics().mic_recovery_state.clone()
     }
 
     pub fn selected_microphone_name(&self) -> Option<String> {
         if !self.active_audio_mode.has_mic() {
             return None;
         }
-        read_latest_selected_microphone_name(&self.capture_log_path)
+        self.log_metrics().selected_microphone_name.clone()
     }
 
     pub fn mic_selected_device_not_found(&self) -> bool {
         if !self.active_audio_mode.has_mic() {
             return false;
         }
-        let Some(content) = read_capture_log_from_offset(&self.capture_log_path, 0) else {
-            return false;
-        };
-        has_mic_selected_device_not_found_marker(&content)
+        self.log_metrics().mic_selected_device_not_found
     }
 
     pub fn last_mic_backend_error(&self) -> Option<(String, String)> {
         if !self.active_audio_mode.has_mic() {
             return None;
         }
-        read_latest_mic_backend_error(&self.capture_log_path)
+        self.log_metrics().mic_backend_error.clone()
     }
 
     pub fn playback_realtime_x(&self) -> Option<f32> {
@@ -481,10 +525,7 @@ impl CaptureEngine {
     }
 
     pub fn queue_starvation_detected(&self) -> bool {
-        has_ffmpeg_queue_starvation_marker_in_log_since(
-            &self.capture_log_path,
-            self.capture_log_offset,
-        )
+        self.log_metrics().queue_starvation_detected
     }
 
     pub fn live_queue_profile(&self) -> LiveQueueProfile {

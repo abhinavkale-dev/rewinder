@@ -1,5 +1,6 @@
 use super::{
-    acquire_capture_lock, build_capture_args_from_pipes, capture_dimensions,
+    acquire_capture_lock, build_capture_args_from_pipes, build_system_plus_mic_mix_graph,
+    capture_dimensions,
     has_first_audio_frame_marker, has_first_system_audio_frame_marker, has_mic_path_ready_marker,
     has_startup_soft_ready_markers, helper_exit_indicates_user_stopped_sharing,
     is_rewinder_capture_process_command, is_startup_interrupted_log, is_user_stopped_sharing_log,
@@ -82,6 +83,26 @@ fn detects_user_stopped_sharing_from_scstream_interrupted_log() {
 fn helper_exit_73_with_stop_markers_maps_to_user_stopped_sharing() {
     let log = "stream started\nphase: stream_stopped_error domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain code=-3805\nphase: stream_stop_classified interrupted=true exit_code=73\n";
     assert!(helper_exit_indicates_user_stopped_sharing(Some(73), log));
+}
+
+#[test]
+fn detects_user_stopped_sharing_from_userstopped_code_even_during_warmup() {
+    let log = "stream start requested\nstream started\nphase: stream_stopped_error domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain code=-3817\n";
+    assert!(is_user_stopped_sharing_log(log));
+    assert!(!is_startup_interrupted_log(log));
+}
+
+#[test]
+fn detects_user_stopped_sharing_from_user_intent_marker() {
+    let log = "stream started\nphase: stream_stop_user_intent code=-3817\nphase: stream_stop_classified interrupted=true exit_code=73\n";
+    assert!(is_user_stopped_sharing_log(log));
+}
+
+#[test]
+fn detects_user_stopped_sharing_from_system_stopped_code() {
+    let log = "stream started\nfirst video frame delivered\nphase: stream_stopped_error domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain code=-3821\n";
+    assert!(is_user_stopped_sharing_log(log));
+    assert!(!is_startup_interrupted_log(log));
 }
 
 #[test]
@@ -334,6 +355,7 @@ fn capture_args_use_small_queues_and_skip_live_faststart() {
         0.5,
         &pipes,
         AudioMode::SystemOnly,
+        "automatic",
         LiveQueueProfile::Small,
     );
     let joined = args.join(" ");
@@ -362,11 +384,38 @@ fn capture_args_use_elevated_queues_when_requested() {
         0.5,
         &pipes,
         AudioMode::SystemPlusMic,
+        "automatic",
         LiveQueueProfile::Elevated,
     );
     let joined = args.join(" ");
     assert!(joined.contains("-thread_queue_size 32"));
     assert!(joined.contains("-thread_queue_size 256"));
+}
+
+#[test]
+fn capture_args_skip_rnnoise_for_voice_isolation_backend() {
+    let mut settings = SettingsDto::default();
+    settings.mic_noise_suppression = true;
+    let pipes = CapturePipes {
+        video_pipe: PathBuf::from("/tmp/video.pipe"),
+        system_audio_pipe: Some(PathBuf::from("/tmp/system_audio.pipe")),
+        mic_audio_pipe: Some(PathBuf::from("/tmp/mic_audio.pipe")),
+    };
+    let args = build_capture_args_from_pipes(
+        &settings,
+        Path::new("/tmp/rewinder-live"),
+        "sessiontest",
+        1920,
+        1080,
+        0.5,
+        &pipes,
+        AudioMode::SystemPlusMic,
+        "voice_isolation",
+        LiveQueueProfile::Elevated,
+    );
+    let joined = args.join(" ");
+    assert!(!joined.contains("arnndn"));
+    assert!(!joined.contains("afftdn"));
 }
 
 #[test]
@@ -483,12 +532,13 @@ fn build_test_capture_engine(segment_dir: PathBuf, session_id: &str) -> CaptureE
         startup_fallback_error: None,
         active_audio_mode: AudioMode::SystemOnly,
         session_id: session_id.to_string(),
-        capture_log_offset: 0,
+        capture_log_offset: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         mic_backend_in_use: "avcapture".to_string(),
         queue_profile: LiveQueueProfile::Small,
         display_signature: 0,
         display_change_seen_at: Arc::new(Mutex::new(None)),
         prune_frozen: Arc::new(AtomicBool::new(false)),
+        log_metrics: Mutex::new(super::LogMetricsCache::default()),
     }
 }
 
@@ -501,7 +551,7 @@ fn replay_selection_prefers_active_session_when_sessions_are_interleaved() {
         write_segment_file(&temp_dir, "other", idx);
         thread::sleep(Duration::from_millis(12));
     }
-    thread::sleep(Duration::from_millis(350));
+    thread::sleep(Duration::from_millis(600));
 
     let engine = build_test_capture_engine(temp_dir.clone(), "active");
     let selection = engine
@@ -537,7 +587,7 @@ fn replay_selection_marks_session_boundary_when_active_history_is_short() {
         write_segment_file(&temp_dir, "active", idx);
         thread::sleep(Duration::from_millis(10));
     }
-    thread::sleep(Duration::from_millis(350));
+    thread::sleep(Duration::from_millis(600));
 
     let engine = build_test_capture_engine(temp_dir.clone(), "active");
     let selection = engine
@@ -580,4 +630,30 @@ fn capture_lock_payload_parsing_and_stale_reclaim_work() {
 
     drop(lock_file);
     let _ = fs::remove_dir_all(temp_dir);
+}
+
+#[test]
+fn mix_graph_uses_rnnoise_when_model_available() {
+    let graph = build_system_plus_mic_mix_graph(10.0, 100, true, Some("/bundle/models/bd.rnnn"));
+    assert!(graph.starts_with(
+        "[1:a]volume=1.000[sys];[2:a]arnndn=m='/bundle/models/bd.rnnn',volume=10.0dB[mic]"
+    ));
+    assert!(!graph.contains("afftdn"));
+    assert!(graph.contains("weights=1 1"));
+    assert!(graph.contains("aresample=async=1:min_hard_comp=0.100:first_pts=0"));
+}
+
+#[test]
+fn mix_graph_falls_back_to_afftdn_without_model() {
+    let graph = build_system_plus_mic_mix_graph(10.0, 100, true, None);
+    assert!(graph.contains("[2:a]afftdn="));
+    assert!(!graph.contains("arnndn"));
+}
+
+#[test]
+fn mix_graph_has_no_denoiser_when_suppression_off() {
+    let graph = build_system_plus_mic_mix_graph(10.0, 100, false, Some("/bundle/models/bd.rnnn"));
+    assert!(graph.contains("[2:a]volume=10.0dB[mic]"));
+    assert!(!graph.contains("arnndn"));
+    assert!(!graph.contains("afftdn"));
 }
