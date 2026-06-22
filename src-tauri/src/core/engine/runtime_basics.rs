@@ -84,7 +84,7 @@ impl Engine {
 
     pub(super) fn set_capture_paused_by_user(
         &self,
-        app: &AppHandle,
+        app: &Arc<dyn EngineHost>,
         paused: bool,
         reason: Option<String>,
     ) {
@@ -146,7 +146,7 @@ impl Engine {
         let _ = reason;
     }
 
-    pub(super) fn disarm_for_user_stopped_sharing(&self, app: &AppHandle, reason: Option<String>) {
+    pub(super) fn disarm_for_user_stopped_sharing(&self, app: &Arc<dyn EngineHost>, reason: Option<String>) {
         let disarm_message = reason.unwrap_or_else(|| {
             "Screen recording was interrupted. Click Restart Capture to resume.".to_string()
         });
@@ -203,7 +203,7 @@ impl Engine {
         events::emit_engine_state(app, &self.get_engine_state());
     }
 
-    pub(super) fn pause_for_capture_owner_conflict(&self, app: &AppHandle, code: &str) {
+    pub(super) fn pause_for_capture_owner_conflict(&self, app: &Arc<dyn EngineHost>, code: &str) {
         if code != "capture_owner_exists" {
             return;
         }

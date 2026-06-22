@@ -19,9 +19,10 @@ use serde::Serialize;
 use crate::encoding::audio_encoder::AudioEncoder;
 use crate::encoding::video_encoder::VideoEncoder;
 use crate::settings::SettingsDto;
+use crate::sys::binaries;
 
 const SEGMENT_EXTENSION: &str = "mp4";
-const SEGMENT_STABLE_GRACE_MS: u64 = 250;
+const SEGMENT_STABLE_GRACE_MS: u64 = 500;
 const STARTUP_MIN_SEGMENT_BYTES: u64 = 32 * 1024;
 const RETENTION_MARGIN_SEGMENTS: usize = 12;
 const PROCESS_TERM_GRACE_MS: u64 = 1_200;
@@ -53,6 +54,9 @@ const STARTUP_SEGMENT_PROGRESS_MIN_BYTES: u64 = 1;
 const HELPER_INTERRUPTED_EXIT_CODE: i32 = 73;
 const CAPTURE_LOCK_FILENAME: &str = "capture.lock";
 const CAPTURE_LOCK_SESSION_PENDING: &str = "pending";
+const LOG_METRICS_REFRESH_INTERVAL_MS: u64 = 500;
+const CAPTURE_LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
+const CAPTURE_LOG_ROTATE_KEEP_BYTES: u64 = 1024 * 1024;
 
 static CAPTURE_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -190,12 +194,13 @@ pub struct CaptureEngine {
     startup_fallback_error: Option<String>,
     active_audio_mode: AudioMode,
     session_id: String,
-    capture_log_offset: u64,
+    capture_log_offset: Arc<AtomicU64>,
     mic_backend_in_use: String,
     queue_profile: LiveQueueProfile,
     display_signature: u64,
     display_change_seen_at: Arc<Mutex<Option<Instant>>>,
     prune_frozen: Arc<AtomicBool>,
+    log_metrics: Mutex<LogMetricsCache>,
 }
 
 impl CaptureEngine {
@@ -204,8 +209,10 @@ impl CaptureEngine {
         queue_profile: LiveQueueProfile,
         startup_strategy: AudioStartupStrategy,
     ) -> Result<Self, String> {
-        let ffmpeg_bin = resolve_ffmpeg_binary();
-        let helper_bin = resolve_sck_helper_binary()?;
+        let ffmpeg_bin = binaries::resolve_ffmpeg_binary();
+        let helper_bin = binaries::resolve_sck_helper_binary(
+            "ScreenCaptureKit helper binary was not built. Rebuild the app and retry.",
+        )?;
 
         let segment_dir = settings.output_dir_path().join(".rewinder-live");
         fs::create_dir_all(&segment_dir)
@@ -409,7 +416,8 @@ impl CaptureEngine {
         let helper_signal = Arc::clone(&helper_child);
         let segment_dir_signal = segment_dir.clone();
         let capture_log_signal = capture_log_path.clone();
-        let capture_log_offset_signal = attempt_log_offset;
+        let capture_log_offset = Arc::new(AtomicU64::new(attempt_log_offset));
+        let capture_log_offset_signal = Arc::clone(&capture_log_offset);
         let retention_secs = settings.buffer_duration_secs;
         let retention_segment_secs = segment_duration_secs;
         let last_error = Arc::new(Mutex::new(None));
@@ -472,7 +480,7 @@ impl CaptureEngine {
                         Ok(Some(status)) => {
                             let log_tail = read_capture_log_tail_since(
                                 &capture_log_signal,
-                                capture_log_offset_signal,
+                                capture_log_offset_signal.load(Ordering::Relaxed),
                                 48,
                             )
                             .unwrap_or_default();
@@ -546,12 +554,13 @@ impl CaptureEngine {
             startup_fallback_error,
             active_audio_mode,
             session_id,
-            capture_log_offset: attempt_log_offset,
+            capture_log_offset,
             mic_backend_in_use,
             queue_profile,
             display_signature: current_display_signature(),
             display_change_seen_at: Arc::new(Mutex::new(None)),
             prune_frozen,
+            log_metrics: Mutex::new(LogMetricsCache::default()),
         })
     }
 
@@ -675,11 +684,13 @@ impl Drop for CaptureEngine {
 }
 
 mod log_helpers;
+mod log_parsers;
 mod process_helpers;
 mod replay_runtime;
 mod startup_helpers;
 
 use log_helpers::*;
+use log_parsers::*;
 use process_helpers::*;
 use startup_helpers::*;
 

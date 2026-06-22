@@ -1,7 +1,7 @@
 use super::*;
 
 impl Engine {
-    pub(super) fn start_pipeline_recovery_worker(self: &Arc<Self>, app: AppHandle) {
+    pub(super) fn start_pipeline_recovery_worker(self: &Arc<Self>, app: Arc<dyn EngineHost>) {
         if self.recovery_worker.lock().is_some() {
             return;
         }
@@ -146,13 +146,33 @@ impl Engine {
                                         .unwrap_or_else(|| "unknown".to_string()),
                                     hard_stepdown
                                 ));
-                                engine.advance_runtime_profile_for_overload_steps(
+                                let transition = engine.advance_runtime_profile_for_overload_steps(
                                     if hard_stepdown { 2 } else { 1 },
-                                )
+                                );
+                                if transition.is_some() {
+                                    *engine.battery_floor_engaged.lock() = false;
+                                }
+                                transition
                             }
                             CaptureRestartReason::ProfileRecovered => {
                                 *engine.recover_since.lock() = None;
                                 engine.regress_runtime_profile_for_recovery()
+                            }
+                            CaptureRestartReason::PowerSourceChanged => {
+                                *engine.battery_floor_since.lock() = None;
+                                let floor = engine.battery_floor_now();
+                                if let Some(transition) =
+                                    engine.set_runtime_profile_at_least_floor(floor)
+                                {
+                                    *engine.battery_floor_engaged.lock() = true;
+                                    Some(transition)
+                                } else {
+                                    let transition = engine.lower_runtime_profile_to_floor(floor);
+                                    if transition.is_some() {
+                                        *engine.battery_floor_engaged.lock() = false;
+                                    }
+                                    transition
+                                }
                             }
                             _ => None,
                         };
@@ -196,6 +216,9 @@ impl Engine {
                                 format!("{} ({from} -> {to})", reason.as_message())
                             }
                             (Some((from, to)), CaptureRestartReason::ProfileRecovered) => {
+                                format!("{} ({from} -> {to})", reason.as_message())
+                            }
+                            (Some((from, to)), CaptureRestartReason::PowerSourceChanged) => {
                                 format!("{} ({from} -> {to})", reason.as_message())
                             }
                             _ => match reason.detail() {
@@ -378,7 +401,11 @@ impl Engine {
                                         "monitoring"
                                     };
                                 engine.record_guard_transition(
-                                    if matches!(reason, CaptureRestartReason::Overloaded) {
+                                    if matches!(
+                                        reason,
+                                        CaptureRestartReason::Overloaded
+                                            | CaptureRestartReason::PowerSourceChanged
+                                    ) {
                                         "step_down"
                                     } else {
                                         "step_up"
@@ -452,6 +479,20 @@ impl Engine {
                                         from.clone(),
                                         to.clone(),
                                         "capture_stable",
+                                    );
+                                } else if matches!(
+                                    reason,
+                                    CaptureRestartReason::PowerSourceChanged
+                                ) {
+                                    engine.append_capture_runtime_marker(&format!(
+                                        "phase: battery_floor_step from={} to={}",
+                                        from, to
+                                    ));
+                                    events::emit_capture_profile_changed(
+                                        &app,
+                                        from.clone(),
+                                        to.clone(),
+                                        "power_source_changed",
                                     );
                                 }
                             }
