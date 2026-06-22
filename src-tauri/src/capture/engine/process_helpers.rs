@@ -303,7 +303,7 @@ pub(super) fn sweep_orphan_capture_processes(
     phase: &str,
     exclude_pids: &HashSet<u32>,
 ) -> CaptureProcessSweepOutcome {
-    let output = match Command::new("ps").args(["-axo", "pid=,command="]).output() {
+    let output = match Command::new("ps").args(["-axww", "-o", "pid=,command="]).output() {
         Ok(value) => value,
         Err(err) => {
             append_capture_log_line(

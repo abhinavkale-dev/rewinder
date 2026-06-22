@@ -282,6 +282,10 @@ pub(super) fn tail_join(lines: &[String], max_lines: usize) -> String {
 
 pub(super) fn read_capture_speed_x_since(path: &Path, offset: u64) -> Option<f32> {
     let content = read_capture_log_from_offset(path, offset)?;
+    parse_latest_capture_speed_x(&content)
+}
+
+pub(super) fn parse_latest_capture_speed_x(content: &str) -> Option<f32> {
     let normalized = content.replace('\r', "\n");
     for token in normalized.split_whitespace().rev() {
         if let Some(value) = token.strip_prefix("speed=") {
@@ -347,196 +351,6 @@ pub(super) fn read_latest_selected_microphone_name(path: &Path) -> Option<String
 pub(super) fn read_latest_mic_backend_error(path: &Path) -> Option<(String, String)> {
     let content = fs::read_to_string(path).ok()?;
     parse_latest_mic_backend_error(&content)
-}
-
-pub(super) fn parse_latest_mic_level_dbfs(log: &str) -> Option<f32> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        let Some(value) = trimmed.strip_prefix("mic_level_dbfs=") else {
-            continue;
-        };
-        if let Ok(parsed) = value.trim().parse::<f32>() {
-            if parsed.is_finite() {
-                return Some(parsed);
-            }
-        }
-    }
-    None
-}
-
-pub(super) fn parse_latest_mic_samples_per_sec(log: &str) -> Option<u32> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        let Some(value) = trimmed.strip_prefix(MIC_SAMPLES_PER_SEC_PREFIX) else {
-            continue;
-        };
-        if let Ok(parsed) = value.trim().parse::<u32>() {
-            if parsed > 0 {
-                return Some(parsed);
-            }
-        }
-    }
-    None
-}
-
-pub(super) fn parse_latest_mic_attach_runtime_state(log: &str) -> Option<MicAttachRuntimeState> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.contains(MIC_LIVE_FRAMES_DETECTED_MARKER)
-            || trimmed.contains(FIRST_MIC_AUDIO_MARKER)
-        {
-            return Some(MicAttachRuntimeState::Live);
-        }
-        if trimmed.contains(MIC_LIVE_FRAMES_LOST_MARKER) {
-            return Some(MicAttachRuntimeState::Degraded);
-        }
-        if trimmed.contains(MIC_SILENCE_FILLER_ACTIVE_MARKER) {
-            return Some(MicAttachRuntimeState::SilenceFiller);
-        }
-    }
-    None
-}
-
-pub(super) fn parse_latest_video_output_fps(log: &str) -> Option<f32> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        let Some(value) = trimmed.strip_prefix(VIDEO_OUTPUT_FPS_PREFIX) else {
-            continue;
-        };
-        if let Ok(parsed) = value.trim().parse::<f32>() {
-            if parsed.is_finite() && parsed > 0.0 {
-                return Some(parsed);
-            }
-        }
-    }
-    None
-}
-
-pub(super) fn parse_latest_video_frame_drop_total(log: &str) -> Option<u64> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        let Some(value) = trimmed.strip_prefix(VIDEO_FRAME_DROP_TOTAL_PREFIX) else {
-            continue;
-        };
-        let token = value.split_whitespace().next().unwrap_or_default().trim();
-        if let Ok(parsed) = token.parse::<u64>() {
-            return Some(parsed);
-        }
-    }
-    None
-}
-
-pub(super) fn parse_latest_video_queue_overflow_count(log: &str) -> Option<u64> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        let Some(value) = trimmed.strip_prefix(VIDEO_QUEUE_OVERFLOW_COUNT_PREFIX) else {
-            continue;
-        };
-        if let Ok(parsed) = value.trim().parse::<u64>() {
-            return Some(parsed);
-        }
-    }
-    None
-}
-
-pub(super) fn parse_latest_system_memory_pressure_level(log: &str) -> Option<String> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        let Some(value) = trimmed.strip_prefix(SYSTEM_MEMORY_PRESSURE_PREFIX) else {
-            continue;
-        };
-        let level = value.trim().to_ascii_lowercase();
-        match level.as_str() {
-            "normal" | "warning" | "critical" => return Some(level),
-            _ => {}
-        }
-    }
-    None
-}
-
-pub(super) fn parse_latest_helper_thermal_state(log: &str) -> Option<String> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        let Some(value) = trimmed.strip_prefix(THERMAL_STATE_PREFIX) else {
-            continue;
-        };
-        let level = value.trim().to_ascii_lowercase();
-        match level.as_str() {
-            "nominal" | "fair" | "serious" | "critical" => return Some(level),
-            _ => {}
-        }
-    }
-    None
-}
-
-pub(super) fn parse_latest_mic_recovery_state(log: &str) -> Option<String> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.contains("phase: mic_backend_recovered")
-            || trimmed.contains("phase: mic_backend_ready")
-        {
-            return Some("ok".to_string());
-        }
-        if trimmed.contains("phase: mic_backend_retry_scheduled")
-            || trimmed.contains("phase: mic_backend_error")
-        {
-            return Some("retrying".to_string());
-        }
-    }
-    None
-}
-
-pub(super) fn parse_latest_selected_microphone_name(log: &str) -> Option<String> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        if !(trimmed.contains("phase: mic_backend_attempt")
-            || trimmed.contains("phase: mic_backend_ready")
-            || trimmed.contains("phase: mic_backend_recovered"))
-        {
-            continue;
-        }
-        let Some(index) = trimmed.find("device_name=") else {
-            continue;
-        };
-        let value = trimmed[index + "device_name=".len()..].trim();
-        if value.is_empty() || value == "system_default" {
-            return None;
-        }
-        return Some(value.to_string());
-    }
-    None
-}
-
-pub(super) fn has_mic_selected_device_not_found_marker(log: &str) -> bool {
-    log.contains("phase: mic_selected_device_not_found")
-}
-
-pub(super) fn parse_latest_mic_backend_error(log: &str) -> Option<(String, String)> {
-    for line in log.lines().rev() {
-        let trimmed = line.trim();
-        if !trimmed.contains("phase: mic_backend_error") {
-            continue;
-        }
-        let code = parse_marker_token(trimmed, "code=")?;
-        let reason_index = trimmed.find("reason=")?;
-        let reason = trimmed[reason_index + "reason=".len()..].trim();
-        if reason.is_empty() {
-            return Some((code.to_string(), code.to_string()));
-        }
-        return Some((code.to_string(), reason.to_string()));
-    }
-    None
-}
-
-fn parse_marker_token<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    let start = line.find(key)?;
-    let value = &line[start + key.len()..];
-    let token = value.split_whitespace().next()?.trim();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token)
-    }
 }
 
 pub(super) fn has_stable_segment_file_for_session(dir: &Path, session_id: Option<&str>) -> bool {
@@ -623,8 +437,6 @@ pub(super) fn has_ffmpeg_segment_open_marker(log: &str) -> bool {
 }
 
 pub(super) fn is_startup_interrupted_log(log: &str) -> bool {
-    // OSS-REF(startup_recovery): classify startup-time SCStream -3805 separately
-    // from post-start interruption so supervision can retry with bounded backoff.
     let lower = log.to_ascii_lowercase();
     let has_stop_marker = lower.contains("phase: stream_stopped_error");
     let has_interruption_code = lower.contains("code=-3805")
@@ -635,6 +447,12 @@ pub(super) fn is_startup_interrupted_log(log: &str) -> bool {
 
 pub(super) fn is_user_stopped_sharing_log(log: &str) -> bool {
     let lower = log.to_ascii_lowercase();
+    if lower.contains("phase: stream_stop_user_intent")
+        || lower.contains("code=-3817")
+        || lower.contains("code=-3821")
+    {
+        return true;
+    }
     let has_post_start_marker = has_first_video_frame_marker(log)
         || lower.contains("phase: first_segment_closed")
         || lower.contains("phase: first_stable_segment");
@@ -759,11 +577,29 @@ pub(super) fn has_mic_sustained_silence_marker_in_log(path: &Path) -> bool {
     content.contains(MIC_SUSTAINED_SILENCE_MARKER)
 }
 
-pub(super) fn build_system_plus_mic_mix_graph(mic_mix_gain_db: f32) -> String {
+pub(super) fn build_system_plus_mic_mix_graph(
+    mic_mix_gain_db: f32,
+    system_volume_percent: u8,
+    mic_noise_suppression: bool,
+    rnnoise_model: Option<&str>,
+) -> String {
     let gain = mic_mix_gain_db.clamp(0.0, 18.0);
+    let denoise = if mic_noise_suppression {
+        match rnnoise_model {
+            Some(model) => format!("arnndn=m='{model}',"),
+            None => "afftdn=nr=12:nf=-40,".to_string(),
+        }
+    } else {
+        String::new()
+    };
+    let system_volume = system_volume_factor(system_volume_percent);
     format!(
-        "[2:a]volume={gain:.1}dB[mic];[1:a][mic]amix=inputs=2:weights=1 2:duration=longest:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[aout]"
+        "[1:a]volume={system_volume:.3}[sys];[2:a]{denoise}volume={gain:.1}dB[mic];[sys][mic]amix=inputs=2:weights=1 1:duration=longest:dropout_transition=0:normalize=0,aresample=async=1:min_hard_comp=0.100:first_pts=0[aout]"
     )
+}
+
+pub(super) fn system_volume_factor(system_volume_percent: u8) -> f32 {
+    f32::from(system_volume_percent.min(100)) / 100.0
 }
 
 pub(super) fn max_replay_history_age(buffer_duration_secs: u16) -> Duration {
@@ -782,4 +618,111 @@ pub(super) fn read_capture_log_from_offset(path: &Path, offset: u64) -> Option<S
     let mut content = String::new();
     file.read_to_string(&mut content).ok()?;
     Some(content)
+}
+
+const LOG_TAIL_WINDOW_BYTES: u64 = 64 * 1024;
+
+pub(super) fn read_capture_log_tail_window(path: &Path, min_offset: u64) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+    let window_start = file_len.saturating_sub(LOG_TAIL_WINDOW_BYTES);
+    let start = window_start.max(min_offset).min(file_len);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let mut content = String::from_utf8_lossy(&bytes).into_owned();
+    if start > min_offset {
+        if let Some(newline) = content.find('\n') {
+            content.drain(..=newline);
+        }
+    }
+    Some(content)
+}
+
+pub(super) fn read_capture_log_tail_bytes(path: &Path, max_bytes: u64) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+    let start = file_len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let mut content = String::from_utf8_lossy(&bytes).into_owned();
+    if start > 0 {
+        if let Some(newline) = content.find('\n') {
+            content.drain(..=newline);
+        }
+    }
+    Some(content)
+}
+
+#[derive(Default)]
+pub(super) struct LogMetricsCache {
+    pub last_refresh_at: Option<Instant>,
+    pub capture_speed_x: Option<f32>,
+    pub video_output_fps: Option<f32>,
+    pub video_frame_drop_total: Option<u64>,
+    pub video_queue_overflow_count: Option<u64>,
+    pub mic_level_dbfs: Option<f32>,
+    pub mic_samples_per_sec: Option<u32>,
+    pub mic_attach_runtime_state: Option<MicAttachRuntimeState>,
+    pub system_memory_pressure_level: Option<String>,
+    pub helper_thermal_state: Option<String>,
+    pub mic_recovery_state: Option<String>,
+    pub selected_microphone_name: Option<String>,
+    pub mic_backend_error: Option<(String, String)>,
+    pub first_audio_frame_seen: bool,
+    pub system_audio_path_ready: bool,
+    pub mic_path_ready: bool,
+    pub mic_frames_seen: bool,
+    pub mic_capture_session_running: bool,
+    pub mic_sustained_silence: bool,
+    pub mic_selected_device_not_found: bool,
+    pub queue_starvation_detected: bool,
+}
+
+pub(super) fn refresh_log_metrics_from_window(cache: &mut LogMetricsCache, log: &str) {
+    if let Some(value) = parse_latest_capture_speed_x(log) {
+        cache.capture_speed_x = Some(value);
+    }
+    if let Some(value) = parse_latest_video_output_fps(log) {
+        cache.video_output_fps = Some(value);
+    }
+    if let Some(value) = parse_latest_video_frame_drop_total(log) {
+        cache.video_frame_drop_total = Some(value);
+    }
+    if let Some(value) = parse_latest_video_queue_overflow_count(log) {
+        cache.video_queue_overflow_count = Some(value);
+    }
+    if let Some(value) = parse_latest_mic_level_dbfs(log) {
+        cache.mic_level_dbfs = Some(value);
+    }
+    if let Some(value) = parse_latest_mic_samples_per_sec(log) {
+        cache.mic_samples_per_sec = Some(value);
+    }
+    if let Some(value) = parse_latest_mic_attach_runtime_state(log) {
+        cache.mic_attach_runtime_state = Some(value);
+    }
+    if let Some(value) = parse_latest_system_memory_pressure_level(log) {
+        cache.system_memory_pressure_level = Some(value);
+    }
+    if let Some(value) = parse_latest_helper_thermal_state(log) {
+        cache.helper_thermal_state = Some(value);
+    }
+    if let Some(value) = parse_latest_mic_recovery_state(log) {
+        cache.mic_recovery_state = Some(value);
+    }
+    if let Some(value) = parse_latest_mic_backend_error(log) {
+        cache.mic_backend_error = Some(value);
+    }
+    if log.contains("device_name=") {
+        cache.selected_microphone_name = parse_latest_selected_microphone_name(log);
+    }
+    cache.first_audio_frame_seen |= has_first_audio_frame_marker(log);
+    cache.system_audio_path_ready |= has_first_system_audio_frame_marker(log);
+    cache.mic_path_ready |= has_mic_path_ready_marker(log);
+    cache.mic_frames_seen |= has_first_mic_audio_frame_marker(log);
+    cache.mic_capture_session_running |= has_mic_capture_session_running_marker(log);
+    cache.mic_sustained_silence |= log.contains(MIC_SUSTAINED_SILENCE_MARKER);
+    cache.mic_selected_device_not_found |= has_mic_selected_device_not_found_marker(log);
+    cache.queue_starvation_detected |= log.contains(FFMPEG_QUEUE_STARVATION_MARKER);
 }

@@ -4,7 +4,11 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::core::state::{MicrophoneDeviceDto, PermissionStateDto};
+use crate::sys::binaries;
 use serde::Deserialize;
+
+const SCK_HELPER_MIC_PROBE_MISSING: &str =
+    "ScreenCaptureKit helper binary is unavailable for microphone probe.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MicrophonePermissionStatus {
@@ -120,7 +124,6 @@ pub fn detect_permissions_for_output_dir(output_dir: &Path) -> PermissionStateDt
                 }
                 PermissionStateDto {
                     screen_recording_granted: true,
-                    // We allow arming without loopback-system-audio availability.
                     system_audio_granted: true,
                     output_dir_writable: true,
                     output_dir_permission_error: None,
@@ -345,7 +348,7 @@ pub fn probe_screen_recording_permission(request_if_needed: bool) -> bool {
 pub fn probe_microphone_permission(request_if_needed: bool) -> MicrophonePermissionProbe {
     #[cfg(target_os = "macos")]
     {
-        let helper_bin = match resolve_sck_helper_binary() {
+        let helper_bin = match binaries::resolve_sck_helper_binary(SCK_HELPER_MIC_PROBE_MISSING) {
             Ok(path) => path,
             Err(err) => {
                 return MicrophonePermissionProbe::with_error(
@@ -435,7 +438,7 @@ struct HelperMicrophoneDeviceDto {
 pub fn list_microphones() -> Result<Vec<MicrophoneDeviceDto>, String> {
     #[cfg(target_os = "macos")]
     {
-        let helper_bin = resolve_sck_helper_binary()?;
+        let helper_bin = binaries::resolve_sck_helper_binary(SCK_HELPER_MIC_PROBE_MISSING)?;
         let output = Command::new(helper_bin)
             .arg("--list-microphones")
             .output()
@@ -467,28 +470,6 @@ pub fn list_microphones() -> Result<Vec<MicrophoneDeviceDto>, String> {
     {
         Ok(Vec::new())
     }
-}
-
-fn resolve_sck_helper_binary() -> Result<String, String> {
-    if let Ok(bin) = std::env::var("REWINDER_SCK_HELPER_BIN") {
-        if !bin.trim().is_empty() {
-            if std::path::Path::new(&bin).exists() {
-                return Ok(bin);
-            }
-            return Err(format!(
-                "REWINDER_SCK_HELPER_BIN is set but missing: {}",
-                bin
-            ));
-        }
-    }
-
-    if let Some(compiled) = option_env!("REWINDER_SCK_HELPER_PATH") {
-        if !compiled.trim().is_empty() && std::path::Path::new(compiled).exists() {
-            return Ok(compiled.to_string());
-        }
-    }
-
-    Err("ScreenCaptureKit helper binary is unavailable for microphone probe.".to_string())
 }
 
 #[cfg(target_os = "macos")]

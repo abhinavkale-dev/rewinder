@@ -18,7 +18,6 @@ pub(super) fn requested_audio_modes(
         {
             vec![AudioMode::SystemPlusMic]
         }
-        // Keep mixed mode first for best-effort mic so mic can attach without restart.
         "system_plus_mic" if settings.mic_enabled => {
             vec![AudioMode::SystemPlusMic, AudioMode::SystemOnly]
         }
@@ -78,61 +77,38 @@ pub(super) fn requested_audio_attempts(
 pub(super) fn normalize_mic_backend_label(value: &str) -> String {
     match value {
         "sck_experimental" => "sck_native".to_string(),
-        "auto" | "avcapture" | "sck_native" => value.to_string(),
+        "auto" | "avcapture" | "sck_native" | "voice_isolation" => value.to_string(),
         _ => "auto".to_string(),
     }
 }
 
-pub(super) fn resolve_ffmpeg_binary() -> String {
-    if let Ok(bin) = std::env::var("REWINDER_FFMPEG_BIN") {
-        if !bin.trim().is_empty() {
-            return bin;
+pub(super) fn resolve_rnnoise_model() -> Option<String> {
+    if let Ok(model) = std::env::var("REWINDER_RNNOISE_MODEL") {
+        if !model.trim().is_empty() && Path::new(&model).exists() {
+            return Some(model);
         }
     }
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(contents_dir) = exe.parent().and_then(|p| p.parent()) {
-            let bundled = contents_dir.join("Resources").join("bin").join("ffmpeg");
+            let bundled = contents_dir
+                .join("Resources")
+                .join("models")
+                .join("bd.rnnn");
             if bundled.exists() {
-                return bundled.to_string_lossy().to_string();
+                return Some(bundled.to_string_lossy().to_string());
             }
         }
     }
 
-    if let Ok(cwd) = std::env::current_dir() {
-        let dev_bundled = cwd.join("src-tauri").join("bin").join("ffmpeg");
-        if dev_bundled.exists() {
-            return dev_bundled.to_string_lossy().to_string();
-        }
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("bd.rnnn");
+    if dev.exists() {
+        return Some(dev.to_string_lossy().to_string());
     }
 
-    if Path::new("/opt/homebrew/bin/ffmpeg").exists() {
-        return "/opt/homebrew/bin/ffmpeg".to_string();
-    }
-
-    "ffmpeg".to_string()
-}
-
-pub(super) fn resolve_sck_helper_binary() -> Result<String, String> {
-    if let Ok(bin) = std::env::var("REWINDER_SCK_HELPER_BIN") {
-        if !bin.trim().is_empty() {
-            if Path::new(&bin).exists() {
-                return Ok(bin);
-            }
-            return Err(format!(
-                "REWINDER_SCK_HELPER_BIN is set but missing: {}",
-                bin
-            ));
-        }
-    }
-
-    if let Some(compiled) = option_env!("REWINDER_SCK_HELPER_PATH") {
-        if !compiled.trim().is_empty() && Path::new(compiled).exists() {
-            return Ok(compiled.to_string());
-        }
-    }
-
-    Err("ScreenCaptureKit helper binary was not built. Rebuild the app and retry.".to_string())
+    None
 }
 
 pub(super) fn start_capture_via_sck_bridge(
@@ -180,6 +156,7 @@ pub(super) fn start_capture_via_sck_bridge(
         segment_duration_secs,
         &pipes,
         mode,
+        mic_backend,
         queue_profile,
     );
     append_capture_log_line(
@@ -187,7 +164,15 @@ pub(super) fn start_capture_via_sck_bridge(
         &format!("ffmpeg args: {}", ffmpeg_args.join(" ")),
     );
     if mode == AudioMode::SystemPlusMic {
-        let mix_graph = build_system_plus_mic_mix_graph(settings.mic_mix_gain_db);
+        let rnnoise_model = resolve_rnnoise_model();
+        let mic_noise_suppression =
+            settings.mic_noise_suppression && mic_backend != "voice_isolation";
+        let mix_graph = build_system_plus_mic_mix_graph(
+            settings.mic_mix_gain_db,
+            settings.system_volume_percent,
+            mic_noise_suppression,
+            rnnoise_model.as_deref(),
+        );
         append_capture_log_line(capture_log_path, &format!("mix graph: {mix_graph}"));
     }
 
@@ -204,6 +189,7 @@ pub(super) fn start_capture_via_sck_bridge(
         &pipes,
         mode,
         mic_backend,
+        ffmpeg_child.id(),
         capture_log_path,
     ) {
         Ok(child) => child,
@@ -454,6 +440,7 @@ pub(super) fn spawn_sck_helper_child(
     pipes: &CapturePipes,
     mode: AudioMode,
     mic_backend: &str,
+    ffmpeg_pid: u32,
     capture_log_path: &Path,
 ) -> Result<Child, String> {
     let stderr_log = OpenOptions::new()
@@ -492,6 +479,10 @@ pub(super) fn spawn_sck_helper_child(
         mic_backend.to_string(),
         "--mic-retry-interval-secs".to_string(),
         settings.mic_retry_interval_secs.to_string(),
+        "--parent-pid".to_string(),
+        std::process::id().to_string(),
+        "--ffmpeg-pid".to_string(),
+        ffmpeg_pid.to_string(),
     ];
 
     if let Some(path) = &pipes.system_audio_pipe {
@@ -508,6 +499,13 @@ pub(super) fn spawn_sck_helper_child(
         if !selected_microphone_id.trim().is_empty() {
             args.push("--selected-microphone-id".to_string());
             args.push(selected_microphone_id.clone());
+        }
+    }
+
+    if let Some(selected_display_id) = &settings.selected_display_id {
+        if !selected_display_id.trim().is_empty() {
+            args.push("--display-id".to_string());
+            args.push(selected_display_id.clone());
         }
     }
 
@@ -539,6 +537,7 @@ pub(super) fn build_capture_args_from_pipes(
     segment_duration_secs: f32,
     pipes: &CapturePipes,
     mode: AudioMode,
+    mic_backend: &str,
     queue_profile: LiveQueueProfile,
 ) -> Vec<String> {
     let segment_pattern = segment_dir.join(format!("seg_{session_id}_%08d.mp4"));
@@ -603,18 +602,27 @@ pub(super) fn build_capture_args_from_pipes(
             args.extend(AudioEncoder::ffmpeg_args(settings, false));
         }
         AudioMode::SystemOnly => {
+            let system_volume = system_volume_factor(settings.system_volume_percent);
             args.extend([
                 "-map".to_string(),
                 "0:v:0".to_string(),
                 "-map".to_string(),
                 "1:a:0".to_string(),
                 "-af".to_string(),
-                "aresample=async=1:first_pts=0".to_string(),
+                format!("volume={system_volume:.3},aresample=async=1:min_hard_comp=0.100:first_pts=0"),
             ]);
             args.extend(AudioEncoder::ffmpeg_args(settings, true));
         }
         AudioMode::SystemPlusMic => {
-            let mix_graph = build_system_plus_mic_mix_graph(settings.mic_mix_gain_db);
+            let rnnoise_model = resolve_rnnoise_model();
+            let mic_noise_suppression =
+                settings.mic_noise_suppression && mic_backend != "voice_isolation";
+            let mix_graph = build_system_plus_mic_mix_graph(
+                settings.mic_mix_gain_db,
+                settings.system_volume_percent,
+                mic_noise_suppression,
+                rnnoise_model.as_deref(),
+            );
             args.extend([
                 "-filter_complex".to_string(),
                 mix_graph,
