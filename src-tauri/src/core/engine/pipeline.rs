@@ -89,6 +89,7 @@ impl Engine {
         &self,
         startup_strategy: AudioStartupStrategy,
     ) -> Result<(), String> {
+        let _pipeline_transition = self.pipeline_transition.lock();
         if self.pipeline.lock().is_some() {
             return Ok(());
         }
@@ -169,6 +170,7 @@ impl Engine {
         self.reset_resource_pressure_tracking();
         let settings_for_bootstrap = self.state.lock().settings.clone();
         let replay_duration_secs = settings_for_bootstrap.replay_duration_secs;
+        let battery_floor = self.battery_floor_now();
         let (profile_index, apply_startup_bootstrap) = {
             let mut profile_index_guard = self.runtime_profile_index.lock();
             let mut selected = *profile_index_guard;
@@ -179,6 +181,19 @@ impl Engine {
                 *self.startup_bootstrap_until.lock() =
                     Some(Instant::now() + Duration::from_secs(STARTUP_BOOTSTRAP_SECS));
                 *self.startup_bootstrap_pending.lock() = true;
+            }
+            let floor_binding = battery_floor > selected;
+            if floor_binding {
+                selected = battery_floor.min(MAX_RUNTIME_PROFILE_INDEX);
+                *profile_index_guard = selected;
+            }
+            {
+                let mut engaged = self.battery_floor_engaged.lock();
+                if floor_binding {
+                    *engaged = true;
+                } else if battery_floor < selected {
+                    *engaged = false;
+                }
             }
             (selected, apply)
         };

@@ -92,3 +92,98 @@ pub(super) fn parse_ps_rss_cpu_totals(stdout: &str) -> (Option<u32>, Option<f32>
     )
 }
 
+pub(super) fn capture_stack_rss_delta_soft_budget_mb(
+    effective_video_resolution: u16,
+    effective_fps: u16,
+) -> u32 {
+    if effective_video_resolution >= 1080 && effective_fps >= 60 {
+        300
+    } else if effective_video_resolution >= 1080 && effective_fps >= 30 {
+        200
+    } else if effective_fps >= 60 {
+        240
+    } else {
+        180
+    }
+}
+
+pub(super) fn capture_stack_rss_delta_hard_budget_mb(
+    effective_video_resolution: u16,
+    effective_fps: u16,
+) -> u32 {
+    let soft = capture_stack_rss_delta_soft_budget_mb(effective_video_resolution, effective_fps);
+    soft.saturating_add(if effective_fps >= 60 { 140 } else { 100 })
+}
+
+pub(super) fn sample_thermal_state() -> Option<String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        return None;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("pmset").arg("-g").arg("therm").output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if !trimmed.to_ascii_lowercase().contains("thermallevel") {
+                continue;
+            }
+            let level = trimmed
+                .split('=')
+                .nth(1)
+                .map(str::trim)
+                .and_then(|value| value.parse::<i32>().ok())?;
+            let label = match level {
+                i32::MIN..=0 => "nominal",
+                1 => "fair",
+                2 => "serious",
+                _ => "critical",
+            };
+            return Some(label.to_string());
+        }
+        if stdout
+            .to_ascii_lowercase()
+            .contains("no thermal warning level")
+        {
+            return Some("nominal".to_string());
+        }
+        None
+    }
+}
+
+pub(super) fn parse_power_source(stdout: &str) -> Option<&'static str> {
+    for line in stdout.lines() {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("now drawing from") {
+            if lower.contains("battery power") {
+                return Some("battery");
+            }
+            if lower.contains("ac power") {
+                return Some("ac");
+            }
+        }
+    }
+    None
+}
+
+pub(super) fn sample_power_source() -> Option<String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        return None;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("pmset").arg("-g").arg("batt").output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        parse_power_source(&stdout).map(|label| label.to_string())
+    }
+}

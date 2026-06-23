@@ -1,7 +1,8 @@
 use super::*;
 
 impl Engine {
-    pub fn recheck_permissions(&self, app: &AppHandle) -> PermissionStateDto {
+    pub fn recheck_permissions(&self, app: &Arc<dyn EngineHost>) -> PermissionStateDto {
+        let _runtime_mutation_gate = self.runtime_mutation_gate.lock();
         let output_dir = self.state.lock().settings.output_dir_path();
         let permission = permissions::detect_permissions_for_output_dir(output_dir.as_path());
         let mic_probe = permissions::probe_microphone_permission(false);
@@ -56,11 +57,6 @@ impl Engine {
         self.stop_pipeline_if_running();
         if let Err(err) = self.ensure_pipeline_for_state() {
             let (code, action) = classify_capture_failure(&err);
-            // The recovery worker may have grabbed the capture lock in the
-            // brief gap between stop and restart.  If so, the pipeline it
-            // started is ours – a single retry after a short sleep lets us
-            // find it via the `pipeline.is_some()` early-return, or acquire
-            // the now-released lock ourselves.
             if code == "capture_owner_exists" {
                 thread::sleep(Duration::from_millis(350));
                 if let Err(retry_err) = self.ensure_pipeline_for_state() {
@@ -105,7 +101,7 @@ impl Engine {
         permission
     }
 
-    pub fn request_microphone_permission(&self, app: &AppHandle) -> PermissionStateDto {
+    pub fn request_microphone_permission(&self, app: &Arc<dyn EngineHost>) -> PermissionStateDto {
         let mic_probe = permissions::probe_microphone_permission(true);
         let output_dir = self.state.lock().settings.output_dir_path();
         let permission = permissions::detect_permissions_for_output_dir(output_dir.as_path());
@@ -213,7 +209,7 @@ impl Engine {
         permission
     }
 
-    pub fn grant_output_dir_access(&self, app: &AppHandle) -> GrantOutputDirAccessResultDto {
+    pub fn grant_output_dir_access(&self, app: &Arc<dyn EngineHost>) -> GrantOutputDirAccessResultDto {
         self.append_capture_runtime_marker("phase: output_dir_permission_assist_requested");
         let output_dir = self.state.lock().settings.output_dir_path();
         let access_probe = permissions::probe_output_dir_access(output_dir.as_path());
@@ -256,7 +252,7 @@ impl Engine {
 
     pub fn grant_screen_recording_access(
         &self,
-        app: &AppHandle,
+        app: &Arc<dyn EngineHost>,
     ) -> GrantScreenRecordingAccessResultDto {
         self.append_capture_runtime_marker("phase: screen_permission_assist_requested");
         let mut opened_settings = false;
@@ -291,7 +287,7 @@ impl Engine {
 
     pub fn grant_microphone_access(
         &self,
-        app: &AppHandle,
+        app: &Arc<dyn EngineHost>,
         open_settings_if_denied: bool,
     ) -> GrantMicrophoneAccessResultDto {
         self.append_capture_runtime_marker("phase: mic_permission_assist_requested");
