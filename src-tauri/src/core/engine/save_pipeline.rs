@@ -64,6 +64,7 @@ impl Engine {
         Option<f32>,
         Option<u32>,
         Option<String>,
+        Option<String>,
     ) {
         let now = Instant::now();
         if let Some(snapshot) = self.process_diagnostics_cache.lock().as_ref() {
@@ -77,6 +78,7 @@ impl Engine {
                     snapshot.capture_stack_cpu_percent,
                     snapshot.capture_stack_rss_delta_mb,
                     snapshot.thermal_state.clone(),
+                    snapshot.power_source.clone(),
                 );
             }
         }
@@ -91,6 +93,7 @@ impl Engine {
             Some(rss_mb.saturating_sub(*baseline_value))
         });
         let thermal_state = sample_thermal_state();
+        let power_source = sample_power_source();
         *self.process_diagnostics_cache.lock() = Some(ProcessDiagnosticsSnapshot {
             sampled_at: now,
             app_rss_mb,
@@ -99,6 +102,7 @@ impl Engine {
             capture_stack_cpu_percent,
             capture_stack_rss_delta_mb,
             thermal_state: thermal_state.clone(),
+            power_source: power_source.clone(),
         });
         (
             app_rss_mb,
@@ -107,6 +111,7 @@ impl Engine {
             capture_stack_cpu_percent,
             capture_stack_rss_delta_mb,
             thermal_state,
+            power_source,
         )
     }
 
@@ -144,7 +149,7 @@ impl Engine {
         (true, false, None, None, Some(eta))
     }
 
-    pub(super) fn register_hotkeys(&self, app: &AppHandle, source: &str) -> Result<(), String> {
+    pub(super) fn register_hotkeys(&self, app: &Arc<dyn EngineHost>, source: &str) -> Result<(), String> {
         let (primary_hotkey, fallback_hotkeys) = {
             let state = self.state.lock();
             (
@@ -153,8 +158,7 @@ impl Engine {
             )
         };
 
-        match hotkeys::replace_registration_with_fallbacks(app, &primary_hotkey, &fallback_hotkeys)
-        {
+        match app.replace_shortcuts(&primary_hotkey, &fallback_hotkeys) {
             Ok(registration) => {
                 let mut state = self.state.lock();
                 state.hotkey_status = match registration.mode {
@@ -276,7 +280,7 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn perform_save_replay(
         &self,
-        app: &AppHandle,
+        app: &Arc<dyn EngineHost>,
         settings: SettingsDto,
         selection: ReplaySelection,
         save_id: u64,
@@ -580,7 +584,7 @@ impl Engine {
         result
     }
 
-    pub(super) fn process_pending_save(&self, app: &AppHandle) {
+    pub(super) fn process_pending_save(&self, app: &Arc<dyn EngineHost>) {
         let request = {
             let guard = self.pending_save.lock();
             guard.clone()

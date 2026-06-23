@@ -5,7 +5,7 @@ use super::*;
 impl Engine {
     pub fn trigger_save_replay(
         &self,
-        app: &AppHandle,
+        app: &Arc<dyn EngineHost>,
         source: TriggerSourceDto,
     ) -> SaveReplayResultDto {
         self.refresh_runtime_readiness_from_pipeline();
@@ -339,17 +339,6 @@ impl Engine {
         result
     }
 
-    pub fn trigger_save_replay_hotkey(self: &Arc<Self>, app: AppHandle) {
-        let engine = Arc::clone(self);
-        thread::spawn(move || {
-            let _ = engine.trigger_save_replay(&app, TriggerSourceDto::Hotkey);
-        });
-    }
-
-    pub fn note_hotkey_repeat_ignored(&self) {
-        self.append_save_trigger_marker("ignored_repeat", "hotkey");
-    }
-
     pub(super) fn enqueue_pending_save(
         &self,
         source: TriggerSourceDto,
@@ -465,7 +454,7 @@ impl Engine {
         self.state.lock().video_smooth_state = VideoSmoothStateDto::Pending;
     }
 
-    pub(super) fn process_pending_smooth_jobs(&self, app: &AppHandle) {
+    pub(super) fn process_pending_smooth_jobs(&self, app: &Arc<dyn EngineHost>) {
         let job = self.pending_smooth_jobs.lock().pop_front();
         let Some(job) = job else {
             return;
@@ -551,7 +540,7 @@ impl Engine {
             });
     }
 
-    pub(super) fn process_pending_fast_integrity_jobs(self: &Arc<Self>, app: &AppHandle) {
+    pub(super) fn process_pending_fast_integrity_jobs(self: &Arc<Self>, app: &Arc<dyn EngineHost>) {
         if self.fast_verify_inflight.load(Ordering::Relaxed) {
             return;
         }
@@ -674,7 +663,7 @@ impl Engine {
 
     pub(super) fn queue_retryable_save(
         &self,
-        app: &AppHandle,
+        app: &Arc<dyn EngineHost>,
         source: TriggerSourceDto,
         blocker: &SaveBlocker,
         anchor_time: SystemTime,
