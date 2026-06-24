@@ -1,11 +1,11 @@
 use super::profile::evaluate_profile_guard_signals;
 use super::{
-    capture_stack_rss_delta_hard_budget_mb, capture_stack_rss_delta_soft_budget_mb,
-    classify_capture_failure, derive_capture_load_state, derive_mic_recovery_state,
-    derive_operator_health_state, effective_profile_for_index, parse_ps_rss_cpu_totals,
-    required_overload_signal_count, save_blocker, segment_stall_threshold_ms,
-    should_apply_startup_bootstrap, Engine, PendingSaveEnqueueOutcome, PendingSaveReason,
-    AUDIO_WARMUP_MIN_DEFER_TTL_MS, STARTUP_INTERRUPT_MAX_RETRIES,
+    battery_floor_index, capture_stack_rss_delta_hard_budget_mb,
+    capture_stack_rss_delta_soft_budget_mb, classify_capture_failure, derive_capture_load_state,
+    derive_mic_recovery_state, derive_operator_health_state, effective_profile_for_index,
+    parse_power_source, parse_ps_rss_cpu_totals, required_overload_signal_count, save_blocker,
+    segment_stall_threshold_ms, should_apply_startup_bootstrap, Engine, PendingSaveEnqueueOutcome,
+    PendingSaveReason, AUDIO_WARMUP_MIN_DEFER_TTL_MS, STARTUP_INTERRUPT_MAX_RETRIES,
 };
 use crate::core::state::{
     CaptureHealthDto, ClipperState, LifecycleState, PermissionStateDto, TriggerSourceDto,
@@ -324,6 +324,18 @@ fn classify_startup_interruption_sets_capture_start_interrupted_code() {
 }
 
 #[test]
+fn classify_userstopped_3817_maps_to_user_stopped_sharing() {
+    let (code, action) = classify_capture_failure(
+        "ScreenCaptureKit helper exited unexpectedly. log: stream started | phase: stream_stopped_error domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain code=-3817 | phase: stream_stop_user_intent code=-3817",
+    );
+    assert_eq!(code, "user_stopped_sharing");
+    assert!(action
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Restart Capture"));
+}
+
+#[test]
 fn classify_exit_73_stream_stop_prefers_user_stopped_sharing_over_startup_retry() {
     let (code, action) = classify_capture_failure(
         "capture_start_timeout: stream start requested | stream started | phase: stream_stopped_error domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain code=-3805 | phase: stream_stop_classified interrupted=true exit_code=73",
@@ -470,7 +482,6 @@ fn runtime_profile_step_down_order_is_locked() {
     let p3 = effective_profile_for_index(&settings, 3);
     let p4 = effective_profile_for_index(&settings, 4);
 
-    // Degradation preserves resolution: FPS/bitrate drop first, 720p is last resort.
     assert_eq!((p0.video_resolution, p0.fps), (1080, 60));
     assert_eq!((p1.video_resolution, p1.fps), (1080, 30));
     assert_eq!((p2.video_resolution, p2.fps), (1080, 30));
@@ -498,7 +509,6 @@ fn startup_bootstrap_respects_quality_preference() {
 
 #[test]
 fn overload_signal_requirement_depends_on_quality_preference() {
-    // Raised thresholds: require sustained multi-signal overload before degradation.
     assert_eq!(required_overload_signal_count("prefer_quality"), 3);
     assert_eq!(required_overload_signal_count("prefer_smoothness"), 2);
     assert_eq!(required_overload_signal_count("unknown"), 2);
@@ -839,6 +849,62 @@ fn hard_stepdown_advances_multiple_profiles_in_one_transition() {
 }
 
 #[test]
+fn ac_plug_in_restores_battery_bound_profile_in_one_action() {
+    let engine = Engine::new(SettingsDto::default(), sample_permission());
+    {
+        let mut state = engine.state.lock();
+        state.settings.video_resolution = 1080;
+        state.settings.fps = 60;
+        state.settings.quality_policy = "adaptive_recover".to_string();
+    }
+    let raised = engine
+        .set_runtime_profile_at_least_floor(1)
+        .expect("battery floor should raise the profile");
+    *engine.battery_floor_engaged.lock() = true;
+    assert_eq!(*engine.runtime_profile_index.lock(), 1);
+
+    let restored = engine
+        .lower_runtime_profile_to_floor(0)
+        .expect("AC plug-in should restore the requested profile");
+    assert_eq!(*engine.runtime_profile_index.lock(), 0);
+    assert_eq!(restored.0, raised.1);
+    assert_eq!(restored.1, raised.0);
+}
+
+#[test]
+fn lower_runtime_profile_to_floor_noop_at_or_below_floor() {
+    let engine = Engine::new(SettingsDto::default(), sample_permission());
+    assert!(engine.lower_runtime_profile_to_floor(0).is_none());
+    assert_eq!(*engine.runtime_profile_index.lock(), 0);
+}
+
+#[test]
+fn lower_runtime_profile_to_floor_stops_at_battery_floor_not_zero() {
+    let engine = Engine::new(SettingsDto::default(), sample_permission());
+    {
+        let mut state = engine.state.lock();
+        state.settings.video_resolution = 1080;
+        state.settings.fps = 60;
+        state.settings.video_bitrate_kbps = 10_000;
+        state.settings.quality_policy = "adaptive_recover".to_string();
+    }
+    engine
+        .advance_runtime_profile_for_overload_steps(3)
+        .expect("overload should advance the profile");
+    assert_eq!(*engine.runtime_profile_index.lock(), 3);
+    engine
+        .lower_runtime_profile_to_floor(1)
+        .expect("profile should lower to the floor");
+    assert_eq!(*engine.runtime_profile_index.lock(), 1);
+}
+
+#[test]
+fn battery_floor_engaged_defaults_to_false() {
+    let engine = Engine::new(SettingsDto::default(), sample_permission());
+    assert!(!*engine.battery_floor_engaged.lock());
+}
+
+#[test]
 fn capture_stack_pid_collection_reads_runtime_pid_files_only() {
     let mut settings = SettingsDto::default();
     let base = std::env::current_dir()
@@ -949,4 +1015,67 @@ fn smooth_postprocess_queue_is_capped_to_latest_single_job() {
     let latest = queue.front().expect("latest smooth job should exist");
     assert_eq!(latest.save_id, 2);
     assert_eq!(latest.clip_path, PathBuf::from("/tmp/b.mp4"));
+}
+
+fn settings_with_video(fps: u16, video_resolution: u16) -> SettingsDto {
+    let mut settings = SettingsDto::default();
+    settings.fps = fps;
+    settings.video_resolution = video_resolution;
+    settings.video_bitrate_kbps = 10_000;
+    settings
+}
+
+#[test]
+fn parse_power_source_reads_ac() {
+    let stdout = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=123)\t100%; charged; 0:00 remaining present: true\n";
+    assert_eq!(parse_power_source(stdout), Some("ac"));
+}
+
+#[test]
+fn parse_power_source_reads_battery() {
+    let stdout = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=123)\t98%; discharging; 3:21 remaining present: true\n";
+    assert_eq!(parse_power_source(stdout), Some("battery"));
+}
+
+#[test]
+fn parse_power_source_desktop_without_battery_reads_ac() {
+    let stdout = "Now drawing from 'AC Power'\n";
+    assert_eq!(parse_power_source(stdout), Some("ac"));
+}
+
+#[test]
+fn parse_power_source_unknown_is_none() {
+    assert_eq!(parse_power_source(""), None);
+    assert_eq!(parse_power_source("unexpected pmset output"), None);
+}
+
+#[test]
+fn battery_floor_index_zero_on_ac() {
+    let settings = settings_with_video(60, 1080);
+    assert_eq!(battery_floor_index(&settings, false, true, 30), 0);
+}
+
+#[test]
+fn battery_floor_index_zero_when_guard_disabled() {
+    let settings = settings_with_video(60, 1080);
+    assert_eq!(battery_floor_index(&settings, true, false, 30), 0);
+}
+
+#[test]
+fn battery_floor_index_caps_1080p60_to_index_one() {
+    let settings = settings_with_video(60, 1080);
+    assert_eq!(battery_floor_index(&settings, true, true, 30), 1);
+    assert_eq!(effective_profile_for_index(&settings, 1).fps, 30);
+}
+
+#[test]
+fn battery_floor_index_no_penalty_when_already_at_or_below_cap() {
+    let settings = settings_with_video(30, 1080);
+    assert_eq!(battery_floor_index(&settings, true, true, 30), 0);
+}
+
+#[test]
+fn battery_floor_index_respects_higher_cap() {
+    let settings = settings_with_video(60, 1080);
+    assert_eq!(battery_floor_index(&settings, true, true, 60), 0);
 }

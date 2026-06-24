@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::core::state::ClipMetadataDto;
 use crate::settings::SettingsDto;
+use crate::sys::binaries;
 
 static CLIP_ID_FALLBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
 const STRICT_DURATION_TOLERANCE_SECS: f32 = 0.5;
@@ -84,8 +85,8 @@ pub fn write_replay_from_segments(
     let prepared_segments = prepare_segments_for_concat(segments, &list_file)?;
     write_concat_list(&list_file, &prepared_segments)?;
 
-    let ffmpeg_bin = resolve_ffmpeg_binary();
-    let ffprobe_bin = resolve_ffprobe_binary(&ffmpeg_bin);
+    let ffmpeg_bin = binaries::resolve_ffmpeg_binary();
+    let ffprobe_bin = binaries::resolve_ffprobe_binary(&ffmpeg_bin);
     let save_mode = SavePathMode::from_settings(
         settings.save_path_mode.as_str(),
         settings.audio_save_mode.as_str(),
@@ -163,26 +164,16 @@ pub fn write_replay_from_segments(
             }
         }
     };
-    // --- Post-concat processing: split by save mode ---
-    //
-    // instant_mp4 / fast: whole-window concat+remux is the final output.
-    //   Only probe duration for metadata. No re-encode, no deep integrity probes.
-    //   This is the gamer-optimised path — fastest possible save.
-    //
-    // smooth / adaptive: correction-heavy path with timing normalisation,
-    //   A/V drift repair, and strict duration capping. Re-encode only when needed.
 
     let measured_duration_secs;
 
     if used_fast_path {
-        // Fast path: single ffprobe for duration metadata, nothing else.
         measured_duration_secs =
             probe_media_duration_secs(&ffprobe_bin, &output_path).map_err(|err| {
                 cleanup_temp_paths(&list_file, &temp_outputs, true);
                 err
             })?;
     } else {
-        // Smooth/adaptive path: full correction pipeline.
         measured_duration_secs = run_correction_pipeline(
             &ffmpeg_bin,
             &ffprobe_bin,
@@ -241,7 +232,6 @@ fn run_correction_pipeline(
             err
         })?;
 
-    // Timing correction for A/V drift (smooth/adaptive only).
     if let Some((video_duration_secs, audio_duration_secs)) = av_stream_durations {
         let max_duration = video_duration_secs.max(audio_duration_secs).max(0.001);
         let drift_ratio = (video_duration_secs - audio_duration_secs).abs() / max_duration;
@@ -273,7 +263,6 @@ fn run_correction_pipeline(
         }
     }
 
-    // Strict duration capping (smooth/adaptive only).
     let duration_cap = target_trim_secs + STRICT_DURATION_TOLERANCE_SECS;
     if measured_duration_secs > duration_cap {
         let strict_args = build_strict_cap_reencode_args(
@@ -320,17 +309,8 @@ pub fn smooth_replay_in_place(output_path: &Path, settings: &SettingsDto) -> Res
         ));
     }
 
-    let ffmpeg_bin = resolve_ffmpeg_binary();
-    let temp_smoothed_path = output_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!(
-            "{}.smooth.tmp.mp4",
-            output_path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or("rewinder")
-        ));
+    let ffmpeg_bin = binaries::resolve_ffmpeg_binary();
+    let temp_smoothed_path = working_temp_path(output_path, "smooth.tmp.mp4");
     let smoothing_args = build_smooth_postprocess_args(settings, output_path, &temp_smoothed_path);
 
     run_ffmpeg(&ffmpeg_bin, &smoothing_args).map_err(|err| {
@@ -357,23 +337,14 @@ pub fn verify_fast_replay_in_place(
         ));
     }
 
-    let ffmpeg_bin = resolve_ffmpeg_binary();
-    let ffprobe_bin = resolve_ffprobe_binary(&ffmpeg_bin);
+    let ffmpeg_bin = binaries::resolve_ffmpeg_binary();
+    let ffprobe_bin = binaries::resolve_ffprobe_binary(&ffmpeg_bin);
     let snapshot = probe_fast_integrity_snapshot(&ffprobe_bin, output_path)?;
     let Some(issue) = detect_fast_integrity_issue(&snapshot, settings.fps) else {
         return Ok(FastReplayVerificationOutcome::Verified);
     };
 
-    let temp_corrected_path = output_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!(
-            "{}.fastverify.tmp.mp4",
-            output_path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or("rewinder")
-        ));
+    let temp_corrected_path = working_temp_path(output_path, "fastverify.tmp.mp4");
     let timing_args = build_playback_timing_correction_args(
         settings,
         output_path,
@@ -444,7 +415,9 @@ impl SavePathMode {
 }
 
 mod helpers;
+mod integrity;
 use helpers::*;
+use integrity::*;
 
 #[cfg(test)]
 mod tests;
