@@ -228,3 +228,234 @@ impl Engine {
                     handles.capture.first_audio_frame_seen(),
                     handles.capture.live_queue_profile().as_str().to_string(),
                     handles.capture.queue_starvation_detected(),
+                    handles.capture.capture_dropped_frames(),
+                    handles.capture.capture_queue_overflows(),
+                    handles.capture.effective_output_fps(),
+                    handles.capture.system_memory_pressure_level(),
+                    handles.capture.helper_thermal_state(),
+                    handles
+                        .capture
+                        .concurrent_session_count(settings.replay_duration_secs),
+                    handles.capture.capture_owner_pid(),
+                )
+            } else {
+                (
+                    0.0,
+                    0.0,
+                    0.0,
+                    None,
+                    None,
+                    state_capture_speed_x,
+                    None,
+                    "recovering".to_string(),
+                    state_save_ready,
+                    state_system_audio_path_ready,
+                    state_mic_path_ready,
+                    state_mic_frames_seen,
+                    state_mic_level_dbfs,
+                    state_mic_capture_session_running,
+                    state_mic_samples_per_sec,
+                    None,
+                    Some(state_mic_recovery_state.clone()),
+                    state_selected_microphone_name.clone(),
+                    state_last_mic_error_code.clone(),
+                    state_last_mic_error_message.clone(),
+                    state_audio_path_ready,
+                    state_first_audio_frame_seen,
+                    state_live_queue_profile.clone(),
+                    false,
+                    state_capture_dropped_frames,
+                    state_capture_queue_overflows,
+                    state_effective_output_fps,
+                    state_system_memory_pressure_level.clone(),
+                    None,
+                    state_concurrent_session_count,
+                    state_capture_owner_pid,
+                )
+            }
+        };
+        let capture_load_state = derive_capture_load_state(
+            capture_speed_x,
+            playback_realtime_x,
+            queue_starvation_detected,
+            effective_output_fps,
+            &state_capture_load_state,
+            effective_video_resolution,
+            requested_video_resolution,
+            effective_fps,
+            requested_fps,
+        );
+        let capture_start_phase = if matches!(capture_health, CaptureHealthDto::Restarting) {
+            None
+        } else {
+            detect_capture_start_phase(last_capture_log_tail.as_deref())
+        };
+        let (
+            app_rss_mb,
+            app_cpu_percent,
+            capture_stack_rss_mb,
+            capture_stack_cpu_percent,
+            capture_stack_rss_delta_mb,
+            sampled_thermal_state,
+            power_source,
+        ) = self.current_process_diagnostics();
+        let thermal_state = helper_thermal_state.or(sampled_thermal_state);
+        let current_profile_idx = *self.runtime_profile_index.lock();
+        let guard_state =
+            if !settings.replay_enabled || matches!(capture_health, CaptureHealthDto::Stopped) {
+                "idle".to_string()
+            } else if state_guard_state == "suppressed" {
+                "suppressed".to_string()
+            } else if current_profile_idx > 0 {
+                "protecting".to_string()
+            } else {
+                "monitoring".to_string()
+            };
+        let last_error_for_health = state_last_error.as_deref().or(capture_error.as_deref());
+        let (operator_health_state, operator_health_message) = derive_operator_health_state(
+            lifecycle_state,
+            capture_health,
+            audio_health,
+            arm_blocker_code.as_deref(),
+            arm_blocker.as_deref(),
+            &guard_state,
+            save_ready,
+            effective_video_resolution,
+            requested_video_resolution,
+            effective_fps,
+            requested_fps,
+            &playback_stability,
+            runtime_mic_recovery_state
+                .as_deref()
+                .unwrap_or(state_mic_recovery_state.as_str()),
+            last_error_for_health,
+        );
+        let mic_attach_state = derive_mic_attach_state(
+            &settings,
+            &active_audio_mode,
+            mic_path_ready,
+            mic_frames_seen,
+            mic_attach_runtime_state,
+            state_mic_attach_state,
+        );
+        let mic_recovery_state = derive_mic_recovery_state(
+            &settings,
+            &active_audio_mode,
+            mic_path_ready,
+            runtime_mic_recovery_state
+                .as_deref()
+                .or(Some(state_mic_recovery_state.as_str())),
+        );
+        let selected_microphone_name =
+            runtime_selected_microphone_name.or(state_selected_microphone_name);
+        let last_mic_error_code = runtime_last_mic_error_code.or(state_last_mic_error_code);
+        let last_mic_error_message =
+            runtime_last_mic_error_message.or(state_last_mic_error_message);
+        let effective_save_stage = if is_saving {
+            SaveStageDto::SavingFast
+        } else if pending_save {
+            SaveStageDto::Queued
+        } else if matches!(save_stage, SaveStageDto::Queued | SaveStageDto::SavingFast) {
+            SaveStageDto::Idle
+        } else {
+            save_stage
+        };
+
+        EngineStateDto {
+            lifecycle_state,
+            capture_health,
+            audio_health,
+            save_stage: effective_save_stage,
+            system_audio_path_ready,
+            system_audio_ready: system_audio_path_ready,
+            mic_path_ready,
+            mic_ready: mic_path_ready,
+            mic_frames_seen,
+            mic_level_dbfs,
+            mic_permission_status: state_mic_permission_status,
+            mic_permission_error: state_mic_permission_error,
+            mic_capture_session_running,
+            mic_samples_per_sec,
+            mic_attach_state,
+            mic_recovery_state,
+            mic_signal_silent: *self.mic_signal_warning_emitted.lock(),
+            selected_microphone_id: settings.selected_microphone_id.clone(),
+            selected_microphone_name,
+            last_mic_error_code,
+            last_mic_error_message,
+            audio_path_ready,
+            first_audio_frame_seen,
+            capture_speed_x,
+            encoder_throughput_x: capture_speed_x,
+            playback_realtime_x,
+            playback_stability,
+            capture_load_state,
+            operator_health_state,
+            operator_health_message,
+            guard_state,
+            guard_primary_reason_code: state_guard_primary_reason_code,
+            guard_contributing_reason_codes: state_guard_contributing_reason_codes,
+            guard_suppressed_reason_code: state_guard_suppressed_reason_code,
+            guard_last_transition_at_epoch_ms: state_guard_last_transition_at_epoch_ms,
+            live_queue_profile,
+            save_ready,
+            hotkey_status,
+            active_audio_mode,
+            effective_audio_mode,
+            capture_backend,
+            mic_backend_in_use,
+            mic_mix_gain_db,
+            requested_video_resolution,
+            requested_fps,
+            requested_video_bitrate_kbps,
+            effective_video_resolution,
+            effective_fps,
+            effective_video_bitrate_kbps,
+            audio_fallback_policy,
+            degrade_reason,
+            audio_degrade_reason,
+            last_audio_mode_error,
+            capture_restart_count,
+            capture_interrupt_count,
+            video_smooth_state: state_video_smooth_state,
+            capture_dropped_frames,
+            capture_queue_overflows,
+            effective_output_fps,
+            concurrent_session_count,
+            capture_owner_pid,
+            app_rss_mb,
+            app_cpu_percent,
+            capture_stack_rss_mb,
+            capture_stack_cpu_percent,
+            capture_stack_rss_delta_mb,
+            system_memory_pressure_level,
+            thermal_state,
+            power_source,
+            capture_crash_loop,
+            is_armed,
+            is_saving,
+            arm_blocker,
+            arm_blocker_code,
+            arm_blocker_action,
+            pending_save,
+            pending_full_window,
+            pending_full_window_deadline_epoch_ms,
+            full_window_wait_remaining_ms,
+            warmup_eta_ms,
+            audio_warmup_grace_ms,
+            buffer_fill_secs,
+            replay_fill_secs,
+            replay_target_secs: settings.replay_duration_secs,
+            rolling_fill_secs,
+            rolling_target_secs: settings.buffer_duration_secs,
+            last_error: state_last_error.or(capture_error),
+            last_capture_log_tail,
+            capture_start_phase,
+            dropped_video_packets,
+            dropped_audio_packets,
+            last_contiguity_break_code,
+            permission,
+            settings,
+        }
+    }
+}

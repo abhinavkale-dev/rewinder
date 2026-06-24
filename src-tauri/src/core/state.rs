@@ -159,6 +159,7 @@ pub struct EngineStateDto {
     pub capture_stack_rss_delta_mb: Option<u32>,
     pub system_memory_pressure_level: Option<String>,
     pub thermal_state: Option<String>,
+    pub power_source: Option<String>,
     pub capture_crash_loop: bool,
     pub is_armed: bool,
     pub is_saving: bool,
