@@ -77,6 +77,8 @@ fn fast_concat_args_keep_stream_copy() {
     let joined = args.join(" ");
     assert!(joined.contains("-c copy"));
     assert!(!joined.contains("aresample=async=1"));
+    assert!(joined.contains("-fflags +genpts"));
+    assert!(joined.contains("-avoid_negative_ts make_zero"));
 }
 
 #[test]
@@ -100,6 +102,10 @@ fn smooth_postprocess_args_force_cfr_and_retime() {
     assert!(joined.contains("aresample=async=1:first_pts=0"));
     assert!(joined.contains("-fps_mode cfr"));
     assert!(joined.contains("-r 60"));
+    assert!(joined.contains("-color_range tv"));
+    assert!(joined.contains("-colorspace bt709"));
+    assert!(joined.contains("-color_primaries bt709"));
+    assert!(joined.contains("-color_trc iec61966-2-1"));
 }
 
 #[test]

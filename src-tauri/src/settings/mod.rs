@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 
+mod patch;
+mod validation;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResolutionPreset {
@@ -85,7 +88,7 @@ pub fn ensure_buffer_for_replay(replay_duration_secs: u16, current_buffer_secs: 
     replay_duration_secs.saturating_add(30).min(600)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsDto {
     pub replay_duration_secs: u16,
@@ -115,6 +118,7 @@ pub struct SettingsDto {
     pub mic_mix_gain_db: f32,
     pub mic_auto_request_permission: bool,
     pub mic_auto_boost_volume: bool,
+    pub mic_noise_suppression: bool,
     pub audio_startup_timeout_ms: u16,
     pub profile_recover_hold_secs: u16,
     pub exclude_current_process_audio: bool,
@@ -122,6 +126,16 @@ pub struct SettingsDto {
     pub audio_save_mode: String,
     pub performance_guard_enabled: bool,
     pub performance_guard_level: String,
+    pub battery_guard_enabled: bool,
+    pub battery_max_fps: u16,
+    #[serde(default = "default_system_volume_percent")]
+    pub system_volume_percent: u8,
+    #[serde(default)]
+    pub selected_display_id: Option<String>,
+}
+
+fn default_system_volume_percent() -> u8 {
+    100
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -154,6 +168,7 @@ pub struct SettingsPatchDto {
     pub mic_mix_gain_db: Option<f32>,
     pub mic_auto_request_permission: Option<bool>,
     pub mic_auto_boost_volume: Option<bool>,
+    pub mic_noise_suppression: Option<bool>,
     pub audio_startup_timeout_ms: Option<u16>,
     pub profile_recover_hold_secs: Option<u16>,
     pub exclude_current_process_audio: Option<bool>,
@@ -161,6 +176,10 @@ pub struct SettingsPatchDto {
     pub audio_save_mode: Option<String>,
     pub performance_guard_enabled: Option<bool>,
     pub performance_guard_level: Option<String>,
+    pub battery_guard_enabled: Option<bool>,
+    pub battery_max_fps: Option<u16>,
+    pub system_volume_percent: Option<u8>,
+    pub selected_display_id: Option<String>,
 }
 
 fn system_ram_gb() -> u64 {
@@ -209,16 +228,21 @@ impl Default for SettingsDto {
             mic_failure_policy: "best_effort".to_string(),
             mic_startup_timeout_ms: 2_500,
             mic_retry_interval_secs: 15,
-            mic_mix_gain_db: 10.0,
+            mic_mix_gain_db: 6.0,
             mic_auto_request_permission: true,
             mic_auto_boost_volume: false,
+            mic_noise_suppression: true,
             audio_startup_timeout_ms: 6_000,
-            profile_recover_hold_secs: 20,
+            profile_recover_hold_secs: 8,
             exclude_current_process_audio: true,
             save_path_mode: "instant_mp4".to_string(),
             audio_save_mode: "fast".to_string(),
             performance_guard_enabled: true,
             performance_guard_level: "balanced".to_string(),
+            battery_guard_enabled: true,
+            battery_max_fps: 30,
+            system_volume_percent: 100,
+            selected_display_id: None,
         }
     }
 }
@@ -237,256 +261,6 @@ fn default_output_dir() -> PathBuf {
 }
 
 impl SettingsDto {
-    pub fn apply_patch(&mut self, patch: SettingsPatchDto) -> Result<(), String> {
-        let requested_bitrate = patch.video_bitrate_kbps;
-        let has_save_path_mode_patch = patch.save_path_mode.is_some();
-
-        if let Some(value) = patch.replay_duration_secs {
-            self.replay_duration_secs = value;
-        }
-        if let Some(value) = patch.buffer_duration_secs {
-            self.buffer_duration_secs = value;
-        }
-        if let Some(value) = patch.fps {
-            self.fps = value;
-        }
-        if let Some(value) = patch.video_resolution {
-            self.video_resolution = value;
-            if requested_bitrate.is_none() {
-                self.video_bitrate_kbps = ResolutionPreset::from_height(value).bitrate_kbps();
-            }
-        }
-        if let Some(value) = requested_bitrate {
-            self.video_bitrate_kbps = value;
-        }
-        if let Some(value) = patch.audio_bitrate_kbps {
-            self.audio_bitrate_kbps = value;
-        }
-        if let Some(value) = patch.output_dir {
-            self.output_dir = value;
-        }
-        if let Some(value) = patch.hotkey {
-            self.hotkey = value;
-        }
-        if let Some(value) = patch.fallback_hotkeys {
-            self.fallback_hotkeys = value;
-        }
-        if let Some(value) = patch.replay_enabled {
-            self.replay_enabled = value;
-        }
-        if let Some(value) = patch.audio_mode {
-            self.audio_mode = value;
-        }
-        if let Some(value) = patch.mic_enabled {
-            self.mic_enabled = value;
-        }
-        if let Some(value) = patch.audio_sample_rate_hz {
-            self.audio_sample_rate_hz = value;
-        }
-        if let Some(value) = patch.audio_channels {
-            self.audio_channels = value;
-        }
-        if let Some(value) = patch.segment_time_ms {
-            self.segment_time_ms = value;
-        }
-        if let Some(value) = patch.warmup_defer_ttl_ms {
-            self.warmup_defer_ttl_ms = value;
-        }
-        if let Some(value) = patch.quality_policy {
-            self.quality_policy = value;
-        }
-        if let Some(value) = patch.quality_preference {
-            self.quality_preference = value;
-        }
-        if let Some(value) = patch.audio_fallback_policy {
-            self.audio_fallback_policy = value;
-        }
-        if let Some(value) = patch.mic_capture_backend {
-            self.mic_capture_backend = normalize_mic_capture_backend(&value).to_string();
-        }
-        if let Some(value) = patch.selected_microphone_id {
-            self.selected_microphone_id = if value.trim().is_empty() {
-                None
-            } else {
-                Some(value)
-            };
-        }
-        if let Some(value) = patch.mic_failure_policy {
-            self.mic_failure_policy = value;
-        }
-        if let Some(value) = patch.mic_startup_timeout_ms {
-            self.mic_startup_timeout_ms = value;
-        }
-        if let Some(value) = patch.mic_retry_interval_secs {
-            self.mic_retry_interval_secs = value;
-        }
-        if let Some(value) = patch.mic_mix_gain_db {
-            self.mic_mix_gain_db = value;
-        }
-        if let Some(value) = patch.mic_auto_request_permission {
-            self.mic_auto_request_permission = value;
-        }
-        if let Some(value) = patch.mic_auto_boost_volume {
-            self.mic_auto_boost_volume = value;
-        }
-        if let Some(value) = patch.audio_startup_timeout_ms {
-            self.audio_startup_timeout_ms = value;
-        }
-        if let Some(value) = patch.profile_recover_hold_secs {
-            self.profile_recover_hold_secs = value;
-        }
-        if let Some(value) = patch.exclude_current_process_audio {
-            self.exclude_current_process_audio = value;
-        }
-        if let Some(value) = patch.save_path_mode {
-            self.save_path_mode = value;
-        }
-        if let Some(value) = patch.audio_save_mode {
-            if !has_save_path_mode_patch {
-                self.save_path_mode = match value.as_str() {
-                    "smooth" => "smooth".to_string(),
-                    "adaptive" => "adaptive".to_string(),
-                    _ => "instant_mp4".to_string(),
-                };
-            }
-            self.audio_save_mode = value;
-        }
-        if let Some(value) = patch.performance_guard_enabled {
-            self.performance_guard_enabled = value;
-        }
-        if let Some(value) = patch.performance_guard_level {
-            self.performance_guard_level = value;
-        }
-
-        self.validate()
-    }
-
-    pub fn validate(&self) -> Result<(), String> {
-        if self.replay_duration_secs == 0 {
-            return Err("replay_duration_secs must be > 0".to_string());
-        }
-        if self.buffer_duration_secs < self.replay_duration_secs {
-            return Err("buffer_duration_secs must be >= replay_duration_secs".to_string());
-        }
-        if !(10..=120).contains(&self.fps) {
-            return Err("fps must be between 10 and 120".to_string());
-        }
-        if !matches!(self.video_resolution, 360 | 480 | 720 | 1080) {
-            return Err("video_resolution must be one of: 360, 480, 720, 1080".to_string());
-        }
-        if self.video_bitrate_kbps < 500 {
-            return Err("video_bitrate_kbps must be >= 500".to_string());
-        }
-        if self.audio_bitrate_kbps < 64 {
-            return Err("audio_bitrate_kbps must be >= 64".to_string());
-        }
-        if self.output_dir.trim().is_empty() {
-            return Err("output_dir cannot be empty".to_string());
-        }
-        if self.hotkey.trim().is_empty() {
-            return Err("hotkey cannot be empty".to_string());
-        }
-        if self.fallback_hotkeys.is_empty() {
-            return Err("fallback_hotkeys cannot be empty".to_string());
-        }
-        if self
-            .fallback_hotkeys
-            .iter()
-            .any(|shortcut| shortcut.trim().is_empty())
-        {
-            return Err("fallback_hotkeys cannot contain empty values".to_string());
-        }
-        if !(250..=2_000).contains(&self.segment_time_ms) {
-            return Err("segment_time_ms must be between 250 and 2000".to_string());
-        }
-        if !(500..=10_000).contains(&self.warmup_defer_ttl_ms) {
-            return Err("warmup_defer_ttl_ms must be between 500 and 10000".to_string());
-        }
-        if !matches!(
-            self.audio_mode.as_str(),
-            "system_only" | "system_plus_mic" | "video_only"
-        ) {
-            return Err(
-                "audio_mode must be one of: system_only, system_plus_mic, video_only".to_string(),
-            );
-        }
-        if !(8_000..=192_000).contains(&self.audio_sample_rate_hz) {
-            return Err("audio_sample_rate_hz must be between 8000 and 192000".to_string());
-        }
-        if !matches!(self.audio_channels, 1 | 2) {
-            return Err("audio_channels must be 1 or 2".to_string());
-        }
-        if !matches!(self.quality_policy.as_str(), "adaptive_recover" | "strict") {
-            return Err("quality_policy must be one of: adaptive_recover, strict".to_string());
-        }
-        if !matches!(
-            self.quality_preference.as_str(),
-            "prefer_quality" | "prefer_smoothness"
-        ) {
-            return Err(
-                "quality_preference must be one of: prefer_quality, prefer_smoothness".to_string(),
-            );
-        }
-        if !matches!(
-            self.audio_fallback_policy.as_str(),
-            "system_only_fallback" | "allow_video_only"
-        ) {
-            return Err(
-                "audio_fallback_policy must be one of: system_only_fallback, allow_video_only"
-                    .to_string(),
-            );
-        }
-        let normalized_mic_backend = normalize_mic_capture_backend(&self.mic_capture_backend);
-        if !matches!(normalized_mic_backend, "auto" | "avcapture" | "sck_native") {
-            return Err(
-                "mic_capture_backend must be one of: auto, avcapture, sck_native".to_string(),
-            );
-        }
-        if !matches!(self.mic_failure_policy.as_str(), "best_effort" | "required") {
-            return Err("mic_failure_policy must be one of: best_effort, required".to_string());
-        }
-        if !(1_000..=10_000).contains(&self.mic_startup_timeout_ms) {
-            return Err("mic_startup_timeout_ms must be between 1000 and 10000".to_string());
-        }
-        if !(5..=120).contains(&self.mic_retry_interval_secs) {
-            return Err("mic_retry_interval_secs must be between 5 and 120".to_string());
-        }
-        if !(0.0..=18.0).contains(&self.mic_mix_gain_db) {
-            return Err("mic_mix_gain_db must be between 0.0 and 18.0".to_string());
-        }
-        if !(2_000..=20_000).contains(&self.audio_startup_timeout_ms) {
-            return Err("audio_startup_timeout_ms must be between 2000 and 20000".to_string());
-        }
-        if !(5..=120).contains(&self.profile_recover_hold_secs) {
-            return Err("profile_recover_hold_secs must be between 5 and 120".to_string());
-        }
-        if !matches!(
-            self.save_path_mode.as_str(),
-            "instant_mp4" | "smooth" | "adaptive" | "fast"
-        ) {
-            return Err(
-                "save_path_mode must be one of: instant_mp4, smooth, adaptive, fast".to_string(),
-            );
-        }
-        if !matches!(
-            self.audio_save_mode.as_str(),
-            "smooth" | "fast" | "adaptive"
-        ) {
-            return Err("audio_save_mode must be one of: smooth, fast, adaptive".to_string());
-        }
-        if !matches!(
-            self.performance_guard_level.as_str(),
-            "balanced" | "quality_first" | "performance_first"
-        ) {
-            return Err(
-                "performance_guard_level must be one of: balanced, quality_first, performance_first"
-                    .to_string(),
-            );
-        }
-
-        Ok(())
-    }
-
     pub fn output_dir_path(&self) -> PathBuf {
         let configured = PathBuf::from(self.output_dir.clone());
         if configured.as_os_str().is_empty() {
@@ -513,7 +287,7 @@ impl SettingsDto {
 fn normalize_mic_capture_backend(value: &str) -> &str {
     match value {
         "sck_experimental" => "sck_native",
-        "auto" | "avcapture" | "sck_native" => value,
+        "auto" | "avcapture" | "sck_native" | "voice_isolation" => value,
         _ => value,
     }
 }
@@ -575,16 +349,19 @@ mod tests {
         assert_eq!(settings.mic_failure_policy, "best_effort");
         assert_eq!(settings.mic_startup_timeout_ms, 2_500);
         assert_eq!(settings.mic_retry_interval_secs, 15);
-        assert_eq!(settings.mic_mix_gain_db, 10.0);
+        assert_eq!(settings.mic_mix_gain_db, 6.0);
         assert!(settings.mic_auto_request_permission);
         assert!(!settings.mic_auto_boost_volume);
+        assert!(settings.mic_noise_suppression);
         assert_eq!(settings.audio_startup_timeout_ms, 6_000);
-        assert_eq!(settings.profile_recover_hold_secs, 20);
+        assert_eq!(settings.profile_recover_hold_secs, 8);
         assert!(settings.exclude_current_process_audio);
         assert_eq!(settings.save_path_mode, "instant_mp4");
         assert_eq!(settings.audio_save_mode, "fast");
         assert!(settings.performance_guard_enabled);
         assert_eq!(settings.performance_guard_level, "balanced");
+        assert!(settings.battery_guard_enabled);
+        assert_eq!(settings.battery_max_fps, 30);
         assert_eq!(
             settings.fallback_hotkeys,
             vec![
@@ -671,6 +448,32 @@ mod tests {
         settings.audio_save_mode = "fast".to_string();
         settings.performance_guard_level = "invalid".to_string();
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_battery_max_fps() {
+        let mut settings = SettingsDto::default();
+        settings.battery_max_fps = 5;
+        assert!(settings.validate().is_err());
+
+        settings.battery_max_fps = 200;
+        assert!(settings.validate().is_err());
+
+        settings.battery_max_fps = 30;
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn apply_patch_updates_battery_guard_fields() {
+        let mut settings = SettingsDto::default();
+        let patch = SettingsPatchDto {
+            battery_guard_enabled: Some(false),
+            battery_max_fps: Some(24),
+            ..SettingsPatchDto::default()
+        };
+        settings.apply_patch(patch).expect("patch should apply");
+        assert!(!settings.battery_guard_enabled);
+        assert_eq!(settings.battery_max_fps, 24);
     }
 
     #[test]
