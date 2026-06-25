@@ -12,6 +12,7 @@ final class CaptureController {
     private var stream: SCStream?
     private var output: CaptureOutput?
     private var micPump: MicCapturePump?
+    private var voicePump: VoiceProcessingMicPump?
     private var micRetryTimer: DispatchSourceTimer?
     private var micRetryAttempt = 0
     private var volumeManager: MicrophoneVolumeManager?
@@ -28,18 +29,24 @@ final class CaptureController {
 
     func start() async throws {
         let shareable = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard config.displayIndex < shareable.displays.count else {
+        guard !shareable.displays.isEmpty else {
             throw CaptureError.noDisplay(config.displayIndex)
         }
 
         let videoWriter = try PipeWriter(path: config.videoPipe)
-        let display = shareable.displays[config.displayIndex]
+        let display = config.displayID.flatMap { id in
+            shareable.displays.first { $0.displayID == id }
+        }
+            ?? (config.displayIndex < shareable.displays.count
+                ? shareable.displays[config.displayIndex]
+                : shareable.displays[0])
         let filter = SCContentFilter(display: display, excludingWindows: [])
 
         let streamConfig = SCStreamConfiguration()
         streamConfig.width = config.width
         streamConfig.height = config.height
         streamConfig.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        streamConfig.colorSpaceName = CGColorSpace.sRGB
         streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(config.fps))
         streamConfig.showsCursor = true
         streamConfig.capturesAudio = config.enableSystemAudio
@@ -142,7 +149,11 @@ final class CaptureController {
         }
 
         if config.enableMic && !useSckMicBackend {
-            startMicPump(on: microphoneQueue, announceRecovered: false)
+            if usesVoiceProcessingBackend {
+                startVoiceProcessingPump(on: microphoneQueue, announceRecovered: false)
+            } else {
+                startMicPump(on: microphoneQueue, announceRecovered: false)
+            }
         }
 
         fputs(
@@ -171,6 +182,8 @@ final class CaptureController {
         stopMicRetryTimer()
         micPump?.stop()
         micPump = nil
+        voicePump?.stop()
+        voicePump = nil
         armShutdownTimeout(cause: cause, exitCode: exitCode)
 
         Task { @MainActor [weak self] in
@@ -234,6 +247,8 @@ final class CaptureController {
         stopMicRetryTimer()
         micPump?.stop()
         micPump = nil
+        voicePump?.stop()
+        voicePump = nil
         stopSystemPressureObservers()
 
         fputs("phase: helper_shutdown_complete cause=\(cause)\n", stderr)
@@ -256,6 +271,10 @@ final class CaptureController {
         default:
             return false
         }
+    }
+
+    private var usesVoiceProcessingBackend: Bool {
+        config.enableMic && config.micBackend == "voice_isolation"
     }
 
     private func emitMicBackendAttempt(backend: String, deviceID: String?) {
@@ -335,7 +354,6 @@ final class CaptureController {
             let reason = String(describing: error)
             emitMicBackendError(backend: "avcapture", code: "mic_backend_setup_failed", reason: reason)
             scheduleMicRetry(queue: audioQueue, reasonCode: "mic_backend_setup_failed")
-            // Best effort: keep replay alive with system audio when mic path fails.
             fputs("microphone capture unavailable (best effort): \(error)\n", stderr)
             fflush(stderr)
         }
@@ -347,6 +365,54 @@ final class CaptureController {
         scheduleMicRetry(queue: queue, reasonCode: code)
     }
 
+    private func startVoiceProcessingPump(on audioQueue: DispatchQueue, announceRecovered: Bool) {
+        guard config.enableMic else {
+            return
+        }
+        let selectedMicrophoneID = config.selectedMicrophoneID
+        emitMicBackendAttempt(backend: "voice_isolation", deviceID: selectedMicrophoneID)
+
+        let voicePump = VoiceProcessingMicPump(
+            sink: output!,
+            queue: audioQueue,
+            selectedMicrophoneID: selectedMicrophoneID
+        ) { [weak self] code, reason in
+            Task { @MainActor [weak self] in
+                self?.handleVoicePumpFailure(code: code, reason: reason, queue: audioQueue)
+            }
+        }
+        do {
+            try voicePump.start()
+            self.voicePump = voicePump
+            stopMicRetryTimer()
+            micRetryAttempt = 0
+            if announceRecovered {
+                emitMicBackendRecovered(
+                    backend: "voice_isolation",
+                    deviceID: voicePump.activeMicrophoneID ?? selectedMicrophoneID
+                )
+            } else {
+                emitMicBackendReady(
+                    backend: "voice_isolation",
+                    deviceID: voicePump.activeMicrophoneID ?? selectedMicrophoneID
+                )
+            }
+        } catch {
+            self.voicePump = nil
+            let reason = String(describing: error)
+            emitMicBackendError(backend: "voice_isolation", code: "mic_backend_setup_failed", reason: reason)
+            scheduleMicRetry(queue: audioQueue, reasonCode: "mic_backend_setup_failed")
+            fputs("voice-processing microphone capture unavailable (best effort): \(error)\n", stderr)
+            fflush(stderr)
+        }
+    }
+
+    private func handleVoicePumpFailure(code: String, reason: String, queue: DispatchQueue) {
+        voicePump = nil
+        emitMicBackendError(backend: "voice_isolation", code: code, reason: reason)
+        scheduleMicRetry(queue: queue, reasonCode: code)
+    }
+
     private func scheduleMicRetry(queue: DispatchQueue, reasonCode: String) {
         guard config.enableMic, !shutdownInFlight else {
             return
@@ -355,7 +421,8 @@ final class CaptureController {
         micRetryAttempt += 1
         let baseDelay = max(config.micRetryIntervalSecs, 1)
         let delaySecs = min(baseDelay * max(micRetryAttempt, 1), 30)
-        fputs("phase: mic_backend_retry_scheduled backend=avcapture reason=\(reasonCode) delay_ms=\(delaySecs * 1000)\n", stderr)
+        let backendLabel = usesVoiceProcessingBackend ? "voice_isolation" : "avcapture"
+        fputs("phase: mic_backend_retry_scheduled backend=\(backendLabel) reason=\(reasonCode) delay_ms=\(delaySecs * 1000)\n", stderr)
         fflush(stderr)
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
         timer.schedule(deadline: .now() + .seconds(delaySecs))
@@ -364,7 +431,11 @@ final class CaptureController {
                 return
             }
             self.micRetryTimer = nil
-            self.startMicPump(on: queue, announceRecovered: true)
+            if self.usesVoiceProcessingBackend {
+                self.startVoiceProcessingPump(on: queue, announceRecovered: true)
+            } else {
+                self.startMicPump(on: queue, announceRecovered: true)
+            }
         }
         micRetryTimer = timer
         timer.resume()

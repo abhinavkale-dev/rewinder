@@ -57,6 +57,39 @@ struct RewinderSCKCapture {
         }
         interrupt.resume()
 
+        let initialParentPID = getppid()
+        let parentWatchdog = DispatchSource.makeTimerSource(queue: .main)
+        parentWatchdog.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        parentWatchdog.setEventHandler {
+            if getppid() != initialParentPID {
+                fputs("phase: helper_parent_lost initial_ppid=\(initialParentPID)\n", stderr)
+                fflush(stderr)
+                controller.stopAndExit(0)
+            }
+        }
+        parentWatchdog.resume()
+
+        let parentExitSource: DispatchSourceProcess?
+        if let parentPID = config.parentPID, parentPID > 1 {
+            let watchdogQueue = DispatchQueue(label: "com.rewinder.sck.parent-watchdog")
+            let source = DispatchSource.makeProcessSource(
+                identifier: parentPID, eventMask: .exit, queue: watchdogQueue
+            )
+            source.setEventHandler {
+                fputs("phase: helper_parent_exited parent_pid=\(parentPID)\n", stderr)
+                fflush(stderr)
+                if let ffmpegPID = config.ffmpegPID, ffmpegPID > 1 {
+                    kill(ffmpegPID, SIGKILL)
+                }
+                _exit(0)
+            }
+            source.resume()
+            parentExitSource = source
+        } else {
+            parentExitSource = nil
+        }
+        _ = parentExitSource
+
         Task { @MainActor in
             do {
                 try await controller.start()
@@ -147,6 +180,7 @@ struct RewinderSCKCapture {
         }
 
         let displayIndex = Int(value(for: "--display-index") ?? "0") ?? 0
+        let displayID = value(for: "--display-id").flatMap { CGDirectDisplayID($0) }
         let enableSystemAudio = (value(for: "--enable-system-audio") ?? "0") == "1"
         let enableMic = (value(for: "--enable-mic") ?? "0") == "1"
         let audioSampleRate = Int(value(for: "--audio-sample-rate") ?? "48000") ?? 48_000
@@ -158,6 +192,8 @@ struct RewinderSCKCapture {
         }
         let micRetryIntervalSecs = Int(value(for: "--mic-retry-interval-secs") ?? "15") ?? 15
         let boostMicVolume = (value(for: "--boost-mic-volume") ?? "0") == "1"
+        let parentPID = value(for: "--parent-pid").flatMap { pid_t($0) }
+        let ffmpegPID = value(for: "--ffmpeg-pid").flatMap { pid_t($0) }
 
         let audioPipe = value(for: "--audio-pipe")
         let micPipe = value(for: "--mic-pipe")
@@ -174,6 +210,7 @@ struct RewinderSCKCapture {
             height: height,
             fps: max(fps, 1),
             displayIndex: max(displayIndex, 0),
+            displayID: displayID,
             videoPipe: videoPipe,
             audioPipe: audioPipe,
             micPipe: micPipe,
@@ -185,7 +222,9 @@ struct RewinderSCKCapture {
             micBackend: micBackend,
             selectedMicrophoneID: selectedMicrophoneID,
             micRetryIntervalSecs: max(micRetryIntervalSecs, 1),
-            boostMicVolume: boostMicVolume
+            boostMicVolume: boostMicVolume,
+            parentPID: parentPID,
+            ffmpegPID: ffmpegPID
         )
     }
 }

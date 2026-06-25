@@ -1,5 +1,6 @@
 import AudioToolbox
 import AVFoundation
+import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Darwin
@@ -19,6 +20,7 @@ struct CaptureConfig {
     let height: Int
     let fps: Int
     let displayIndex: Int
+    let displayID: CGDirectDisplayID?
     let videoPipe: String
     let audioPipe: String?
     let micPipe: String?
@@ -31,6 +33,8 @@ struct CaptureConfig {
     let selectedMicrophoneID: String?
     let micRetryIntervalSecs: Int
     let boostMicVolume: Bool
+    let parentPID: pid_t?
+    let ffmpegPID: pid_t?
 }
 
 enum CaptureError: Error, CustomStringConvertible {

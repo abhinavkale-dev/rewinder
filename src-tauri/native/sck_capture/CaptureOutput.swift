@@ -62,6 +62,7 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     private var skippedFrames: UInt64 = 0
     private var droppedVideoFrames: UInt64 = 0
     private var videoQueueOverflows: UInt64 = 0
+    private var colorimetryLogged = false
     private var lastVideoRateEmitNs: UInt64 = 0
     private var writtenVideoFramesForRate: UInt64 = 0
     private var lastDropEmitNs: UInt64 = 0
@@ -177,15 +178,24 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         fflush(stderr)
         fputs("ScreenCaptureKit stopped with error: \(error)\n", stderr)
         fflush(stderr)
-        let interruptedBySCKService = nsError.domain.contains("SCStreamErrorDomain") && nsError.code == -3805
-        let exitCode: Int32 = interruptedBySCKService ? streamInterruptedExitCode : 1
+        let isSCKDomain = nsError.domain.contains("SCStreamErrorDomain")
+        let interruptedBySCKService = isSCKDomain && nsError.code == -3805
+        let stoppedByUserIntent = isSCKDomain && (nsError.code == -3817 || nsError.code == -3821)
+        if stoppedByUserIntent {
+            fputs("phase: stream_stop_user_intent code=\(nsError.code)\n", stderr)
+            fflush(stderr)
+        }
+        let treatAsInterrupted = interruptedBySCKService || stoppedByUserIntent
+        let exitCode: Int32 = treatAsInterrupted ? streamInterruptedExitCode : 1
         fputs(
-            "phase: stream_stop_classified interrupted=\(interruptedBySCKService ? "true" : "false") exit_code=\(exitCode)\n",
+            "phase: stream_stop_classified interrupted=\(treatAsInterrupted ? "true" : "false") exit_code=\(exitCode)\n",
             stderr
         )
         fflush(stderr)
         requestHelperShutdown(
-            cause: interruptedBySCKService ? "stream_stopped_interrupted" : "stream_stopped_error",
+            cause: stoppedByUserIntent
+                ? "stream_stopped_user_intent"
+                : (interruptedBySCKService ? "stream_stopped_interrupted" : "stream_stopped_error"),
             exitCode: exitCode
         )
     }
@@ -212,7 +222,6 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
             do {
                 try handleAudio(sampleBuffer, isMic: false)
             } catch {
-                // Keep capture alive if audio writer path is temporarily unavailable.
                 fputs("system audio write failed: \(error)\n", stderr)
                 fflush(stderr)
             }
@@ -221,7 +230,6 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
                 do {
                     try handleAudio(sampleBuffer, isMic: true)
                 } catch {
-                    // Keep capture alive in best-effort mic mode.
                     fputs("microphone write failed: \(error)\n", stderr)
                     fflush(stderr)
                 }
@@ -237,6 +245,11 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
 
         guard let pixelBuffer = sampleBuffer.imageBuffer else {
             return
+        }
+
+        if !colorimetryLogged {
+            colorimetryLogged = true
+            logFrameColorimetry(pixelBuffer)
         }
 
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
@@ -256,6 +269,17 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         }
 
         publishLatestVideoFrame(packed)
+    }
+
+    private func logFrameColorimetry(_ pixelBuffer: CVPixelBuffer) {
+        func attachment(_ key: CFString) -> String {
+            (CVBufferCopyAttachment(pixelBuffer, key, nil) as? String) ?? "none"
+        }
+        fputs(
+            "phase: video_colorimetry matrix=\(attachment(kCVImageBufferYCbCrMatrixKey)) primaries=\(attachment(kCVImageBufferColorPrimariesKey)) transfer=\(attachment(kCVImageBufferTransferFunctionKey))\n",
+            stderr
+        )
+        fflush(stderr)
     }
 
     private func frameStatus(for sampleBuffer: CMSampleBuffer) -> SCFrameStatus? {
@@ -657,6 +681,34 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         return didConvert ? output : nil
     }
 
+    private func downmixByFirstChannel(
+        interleaved: Data,
+        sourceChannels: Int,
+        targetChannels: Int,
+        frameCount: Int
+    ) -> Data {
+        var output = Data(count: frameCount * targetChannels * MemoryLayout<Float>.size)
+        output.withUnsafeMutableBytes { rawDst in
+            guard let dst = rawDst.baseAddress?.assumingMemoryBound(to: Float.self) else {
+                return
+            }
+            interleaved.withUnsafeBytes { rawSrc in
+                guard let src = rawSrc.baseAddress?.assumingMemoryBound(to: Float.self) else {
+                    return
+                }
+                let stride = max(sourceChannels, 1)
+                let availableFrames = min(frameCount, rawSrc.count / (MemoryLayout<Float>.size * stride))
+                for frame in 0..<availableFrames {
+                    let sample = src[frame * stride]
+                    for channel in 0..<targetChannels {
+                        dst[frame * targetChannels + channel] = sample
+                    }
+                }
+            }
+        }
+        return output
+    }
+
     private func normalizeMicToTargetFormat(
         interleaved: Data,
         sourceSampleRate: Float64,
@@ -665,16 +717,29 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     ) -> Data? {
         let targetSampleRate = Float64(targetAudioSampleRate)
         let targetChannels = targetAudioChannels
-        let needsConversion = sourceChannels != targetChannels || abs(sourceSampleRate - targetSampleRate) > 1.0
+
+        var workingInterleaved = interleaved
+        var workingChannels = sourceChannels
+        if sourceChannels > 2 {
+            workingInterleaved = downmixByFirstChannel(
+                interleaved: interleaved,
+                sourceChannels: sourceChannels,
+                targetChannels: targetChannels,
+                frameCount: frameCount
+            )
+            workingChannels = targetChannels
+        }
+
+        let needsConversion = workingChannels != targetChannels || abs(sourceSampleRate - targetSampleRate) > 1.0
         if !needsConversion {
-            return interleaved
+            return workingInterleaved
         }
 
         guard
             let sourceFormat = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
                 sampleRate: sourceSampleRate,
-                channels: AVAudioChannelCount(max(sourceChannels, 1)),
+                channels: AVAudioChannelCount(max(workingChannels, 1)),
                 interleaved: true
             ),
             let targetFormat = AVAudioFormat(
@@ -687,7 +752,7 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
             return nil
         }
 
-        let sourceSignature = "\(Int(sourceSampleRate))hz-\(sourceChannels)ch"
+        let sourceSignature = "\(Int(sourceSampleRate))hz-\(workingChannels)ch"
         if micConverter == nil || micConverterSourceSignature != sourceSignature {
             micConverter = AVAudioConverter(from: sourceFormat, to: targetFormat)
             micConverterSourceSignature = sourceSignature
@@ -717,7 +782,7 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         else {
             return nil
         }
-        interleaved.withUnsafeBytes { raw in
+        workingInterleaved.withUnsafeBytes { raw in
             guard let srcPtr = raw.baseAddress else {
                 return
             }
@@ -944,7 +1009,7 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func primeSystemAudioPipe(sampleRate: Int, channels: Int) {
         _ = bootstrapAudioWriter(isMic: false, connectTimeoutNs: 2_000_000_000)
-        let frames = max(sampleRate / 50, 1) // 20ms of silence
+        let frames = max(sampleRate / 50, 1)
         let byteCount = frames * max(channels, 1) * MemoryLayout<Float>.size
         let silence = Data(count: byteCount)
         do {
@@ -960,7 +1025,7 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     func primeMicPipe(sampleRate: Int, channels: Int) {
         _ = bootstrapAudioWriter(isMic: true, connectTimeoutNs: 500_000_000)
 
-        let frames = max(sampleRate / 50, 1) // 20ms of silence
+        let frames = max(sampleRate / 50, 1)
         let byteCount = frames * max(channels, 1) * MemoryLayout<Float>.size
         let silence = Data(count: byteCount)
         micSilenceFrame = silence
