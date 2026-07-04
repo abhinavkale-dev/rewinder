@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Rewinder</string>
+    <key>CFBundleDisplayName</key>
+    <string>Rewinder</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.rewinder.app</string>
+    <key>CFBundleExecutable</key>
+    <string>Rewinder</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>Rewinder</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>26.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Rewinder records your screen so it can save the last moments on demand.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Rewinder mixes your microphone into saved replays when you enable mic capture.</string>
+</dict>
+</plist>

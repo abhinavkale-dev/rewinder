@@ -79,3 +79,85 @@ Replaces the earlier generic ring / warp burst around the owl.
 Storyboard (~2.9s):
 
 | Time   | Beat |
+|--------|------|
+| 0ms    | Owl fades in asleep (eyes closed, slight slouch) |
+| 600ms  | Sleepy half-blink |
+| 1050ms | Eyes spring open, head lifts |
+| 1450ms | Pupils glance left |
+| 1900ms | Pupils glance right |
+| 2350ms | Pupils settle; two accent ripples converge *into* the owl |
+| 2900ms | Auto-advance to Get Started |
+
+- Tap anywhere during Step 1 skips to Get Started.
+- Reduce Motion: static awake owl, single fade, shorter hold (~1.5s), no blinks / glances / ripples.
+
+Owl animation knobs (defaults keep the normal logo look elsewhere):
+
+- `eyeOpenness` — vertical squash of each eye group (cartoon blink)
+- `pupilShift` — horizontal iris + catch-light offset (glance)
+
+### Step 2 — Get Started
+
+- Owl stays large and centered
+- Title: **Welcome to Rewinder** (no personalized name)
+- Subtitle: "Your screen's last moments, always ready to save."
+- **Get Started** button → Step 3
+
+### Step 3 — Permissions (unchanged flow)
+
+- Owl shrinks to the top
+- Screen Recording (required) + Microphone (optional)
+- Privacy note + Continue
+- Continue blocked (shake) until Screen Recording is granted
+- If mic is skipped, settings patch to `system_only` / mic off
+
+---
+
+## 3. Light mode compatibility
+
+| Surface | Change |
+|---------|--------|
+| Boot splash | Adaptive `Theme.appBackground`; semantic text colors |
+| Onboarding | Already used semantic colors + `Theme.appBackground` |
+| Theme | Removed unused fixed `splashBackground` |
+| Owl sticker | Works on light and dark (white face + shadow) |
+
+---
+
+## Key files touched
+
+| File | Role |
+|------|------|
+| `Views/LoadingView.swift` | Boot splash storyboard |
+| `Views/ContentView.swift` | Splash hold + crossfade handoff |
+| `Views/OnboardingView.swift` | 3-step flow + owl wake-up storyboard |
+| `Branding/RewinderOwlLogo.swift` | `eyeOpenness` / `pupilShift` |
+| `Components/BufferRing.swift` | Shared `BufferRingSweep` for splash |
+| `Components/Theme.swift` | Adaptive app background; splash constant removed |
+
+---
+
+## Accessibility
+
+- **Reduce Motion**: splash and intro collapse to short static fades; no loops, blinks, glances, or ripples.
+- Boot errors never wait on animation timing.
+- Tap-to-skip on the intro cancels the storyboard task cleanly.
+
+---
+
+## How to verify
+
+```bash
+cd RewinderApp
+swift build
+./scripts/package_app.sh
+defaults write com.rewinder.app hasCompletedOnboarding -bool false
+open build/Rewinder.app
+```
+
+Check:
+
+1. Boot splash ring → Home (or onboarding overlay on first run)
+2. Owl asleep → wake → glance → Get Started → permissions
+3. System light / dark appearance: backgrounds and text stay legible
+4. Reduce Motion: no sweep / blink choreography
