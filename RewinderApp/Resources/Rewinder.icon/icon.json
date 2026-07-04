@@ -1,0 +1,27 @@
+{
+  "fill" : {
+    "solid" : "srgb:0.14510,0.38431,0.98431,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "Rewinder-Foreground.svg",
+          "name" : "Owl",
+          "fill" : "none",
+          "position" : {
+            "scale" : 1.0,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "name" : "Owl"
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
