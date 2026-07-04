@@ -1,0 +1,79 @@
+<!doctype html>
+<!--
+  Source artwork for the Rewinder .dmg install-window background.
+  Aside-style PORTRAIT layout: app icon top-center, Applications folder
+  below, a brand-blue beam that widens and brightens downward (the drag
+  path made visible), halftone dots at the beam's fringe, tiny mono
+  sign-off at the bottom. No instruction text — the glow + chevrons ARE
+  the instruction. The backdrop recedes; the live icons stay strongest.
+
+  Rendered to Resources/dmg-background.png (1x, 460x640) and
+  dmg-background@2x.png (2x, 920x1280). To re-render after editing:
+
+    CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    "$CHROME" --headless=new --force-device-scale-factor=1 \
+      --window-size=920,1280 --screenshot=/tmp/bg@2x.png \
+      "file://$PWD/dmg-background.html"
+    cp /tmp/bg@2x.png ../Resources/dmg-background@2x.png
+    sips -z 640 460 /tmp/bg@2x.png --out ../Resources/dmg-background.png
+
+  IMPORTANT: this only draws the backdrop (canvas + beam + chevrons + footer).
+  The Rewinder.app icon and the Applications folder alias are LIVE icons
+  that create-dmg drops on top, and Finder draws their name labels
+  (create-dmg: --window-size 460 640, --icon-size 110,
+   --icon "Rewinder.app" 230 195, --app-drop-link 230 450).
+
+  Coordinate space here is 2x (920x1280). Point->px = x2:
+    app icon center (230,195) -> (460,390)
+    folder center   (230,450) -> (460,900)
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 920px; height: 1280px; }
+      .stage {
+        position: relative;
+        width: 920px;
+        height: 1280px;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        /* Off-white with the faintest cool tint — never pure white. */
+        background: linear-gradient(180deg, #fdfdfe 0%, #f7fafd 100%);
+      }
+
+      /* The drag beam — narrow behind the app icon, widening and gaining
+         saturation as it falls toward Applications (Aside's cone). Blurred
+         clip-path polygon so the edges melt into the canvas. */
+      .beam {
+        position: absolute;
+        left: 160px;
+        top: 430px;
+        width: 600px;
+        height: 480px;
+        clip-path: polygon(38% 0%, 62% 0%, 100% 100%, 0% 100%);
+        background: linear-gradient(180deg,
+          rgba(47,109,243,0.08) 0%,
+          rgba(47,109,243,0.22) 55%,
+          rgba(59,125,246,0.50) 100%);
+        filter: blur(26px);
+        /* fade the cone's bottom into the bloom — no hard cutoff edge */
+        -webkit-mask-image: linear-gradient(180deg,
+          #000 0%, #000 70%, transparent 100%);
+        mask-image: linear-gradient(180deg,
+          #000 0%, #000 70%, transparent 100%);
+        pointer-events: none;
+      }
+
+      /* The bloom — brightest right behind the Applications folder, so the
+         destination glows as the landing spot. */
+      .bloom {
+        position: absolute;
+        left: 140px;      /* ellipse center (460, 880) */
+        top: 700px;
+        width: 640px;
+        height: 360px;
+        background: radial-gradient(50% 50% at 50% 50%,
+          rgba(74,139,245,0.55) 0%,
+          rgba(47,109,243,0.25) 52%,
