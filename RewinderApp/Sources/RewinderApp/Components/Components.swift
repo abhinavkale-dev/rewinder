@@ -70,3 +70,76 @@ struct PermissionChip: View {
     var accessibilityTitle: String = ""
     var accessibilityHint: String = ""
     let action: @MainActor () -> Void
+
+    private var leadingIcon: String {
+        stage == .granted ? "checkmark.circle.fill" : icon
+    }
+
+    private var displayColor: Color {
+        stage == .granted ? Theme.success : tone.color
+    }
+
+    var body: some View {
+        Button { action() } label: {
+            HStack(spacing: 9) {
+                Image(systemName: leadingIcon)
+                    .font(.callout)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(displayColor)
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: stage == .granted)
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+                trailing
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .glassEffect(.regular, in: .capsule)
+            .overlay(Capsule().strokeBorder(displayColor.opacity(0.28), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .pointerStyle(stage == .granted ? .default : .link)
+        .disabled(stage == .granted)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityTitle.isEmpty ? title : accessibilityTitle)
+        .accessibilityHint(accessibilityHint)
+        .accessibilityValue(stage == .checking ? "Checking" : (stage == .granted ? "Granted" : ""))
+    }
+
+    @ViewBuilder private var trailing: some View {
+        switch stage {
+        case .idle:
+            Image(systemName: "arrow.forward")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        case .checking:
+            ProgressView().controlSize(.small)
+        case .granted:
+            EmptyView()
+        }
+    }
+}
+
+enum PermissionStatusIcon {
+    enum Status { case granted, needed, off }
+}
+
+struct HealthBadge: View {
+    let label: String
+    let value: String
+    let tone: Tone
+
+    var body: some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(tone.color)
+        }
+    }
+}
