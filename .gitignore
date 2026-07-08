@@ -19,6 +19,8 @@ target/
 research/
 scripts/perf/
 
+web/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
