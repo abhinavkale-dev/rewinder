@@ -346,3 +346,351 @@ impl Engine {
                             .should_suppress_initial_startup_fallback(
                                 in_startup_window,
                                 current_session_has_stable_segment,
+                                resource_hard_triggered,
+                            );
+                        let startup_stepdown_blocked =
+                            in_startup_window && current_profile_idx >= 1;
+                        if startup_initial_guard_blocked {
+                            self.record_guard_transition(
+                                "suppressed",
+                                "suppressed",
+                                false,
+                                primary_reason_code.clone(),
+                                contributing_reason_codes.clone(),
+                                Some("startup_initial_guard".to_string()),
+                                None,
+                                None,
+                            );
+                            handles.capture.append_runtime_marker(&format!(
+                                "phase: overload_transition_suppressed reason=startup_initial_guard primary_reason_code={} contributing_reason_codes={} signal_count={} required_signals={} current_profile_idx={} effective_target_fps={} requested_fps={} hard_triggered={} system_memory_pressure={} thermal_state={}",
+                                primary_reason_code
+                                    .as_deref()
+                                    .unwrap_or("none"),
+                                if contributing_reason_codes.is_empty() {
+                                    "none".to_string()
+                                } else {
+                                    contributing_reason_codes.join(",")
+                                },
+                                guard_signals.overload_signal_count,
+                                guard_signals.sustained_overload_signal_requirement,
+                                current_profile_idx,
+                                current_effective_profile.fps,
+                                settings_snapshot.fps,
+                                resource_hard_triggered,
+                                system_memory_pressure_level
+                                    .clone()
+                                    .unwrap_or_else(|| "none".to_string()),
+                                thermal_state.clone().unwrap_or_else(|| "none".to_string())
+                            ));
+                            *overload_since = None;
+                        } else if startup_stepdown_blocked {
+                            self.record_guard_transition(
+                                "suppressed",
+                                "suppressed",
+                                false,
+                                primary_reason_code.clone(),
+                                contributing_reason_codes.clone(),
+                                Some("startup_stepdown_guard".to_string()),
+                                None,
+                                None,
+                            );
+                            handles.capture.append_runtime_marker(&format!(
+                                "phase: overload_transition_suppressed reason=startup_stepdown_guard primary_reason_code={} contributing_reason_codes={} signal_count={} required_signals={} current_profile_idx={} effective_target_fps={} requested_fps={} hard_triggered={} system_memory_pressure={} thermal_state={}",
+                                primary_reason_code
+                                    .as_deref()
+                                    .unwrap_or("none"),
+                                if contributing_reason_codes.is_empty() {
+                                    "none".to_string()
+                                } else {
+                                    contributing_reason_codes.join(",")
+                                },
+                                guard_signals.overload_signal_count,
+                                guard_signals.sustained_overload_signal_requirement,
+                                current_profile_idx,
+                                current_effective_profile.fps,
+                                settings_snapshot.fps,
+                                resource_hard_triggered,
+                                system_memory_pressure_level
+                                    .clone()
+                                    .unwrap_or_else(|| "none".to_string()),
+                                thermal_state.clone().unwrap_or_else(|| "none".to_string())
+                            ));
+                            *overload_since = None;
+                        } else {
+                            let emergency_trigger = guard_signals.speed_below_emergency
+                                || guard_signals.overflow_trigger
+                                || drop_delta >= OVERLOAD_DROP_EMERGENCY_DELTA_THRESHOLD
+                                || resource_hard_triggered;
+                            let sustained_overload = current_session_has_stable_segment
+                                && guard_signals.overload_signal_count
+                                    >= guard_signals.sustained_overload_signal_requirement
+                                && now.duration_since(*started_at)
+                                    >= Duration::from_secs(PLAYBACK_OVERLOAD_HOLD_SECS);
+                            if emergency_trigger || sustained_overload {
+                                let non_critical_transition_blocked = in_profile_dwell
+                                    || in_profile_cooldown
+                                    || non_critical_restart_suppressed_for_save;
+                                let transition_blocked =
+                                    non_critical_transition_blocked && !resource_hard_triggered;
+                                if !transition_blocked {
+                                    *self.resource_hard_stepdown_pending.lock() =
+                                        resource_hard_triggered;
+                                    let reason = if resource_hard_triggered {
+                                        "resource_hard"
+                                    } else if emergency_trigger {
+                                        "emergency"
+                                    } else {
+                                        "metric"
+                                    };
+                                    let startup_guard = if in_startup_window
+                                        && !current_session_has_stable_segment
+                                        && current_profile_idx == 0
+                                        && resource_hard_triggered
+                                    {
+                                        "allowed_hard_resource"
+                                    } else {
+                                        "not_applicable"
+                                    };
+                                    handles.capture.append_runtime_marker(&format!(
+                                        "phase: overload_stepdown reason={} startup_guard={} primary_reason_code={} contributing_reason_codes={} signal_count={} required_signals={} current_profile_idx={} drop_delta={} overflow_delta={} output_fps={} effective_target_fps={} requested_fps={} stack_rss_mb={} stack_cpu_percent={} stack_rss_delta_mb={} system_memory_pressure={} thermal_state={}",
+                                        reason,
+                                        startup_guard,
+                                        primary_reason_code
+                                            .as_deref()
+                                            .unwrap_or("none"),
+                                        if contributing_reason_codes.is_empty() {
+                                            "none".to_string()
+                                        } else {
+                                            contributing_reason_codes.join(",")
+                                        },
+                                        guard_signals.overload_signal_count,
+                                        guard_signals.sustained_overload_signal_requirement,
+                                        current_profile_idx,
+                                        drop_delta,
+                                        overflow_delta,
+                                        effective_output_fps
+                                            .map(|value| format!("{value:.2}"))
+                                            .unwrap_or_else(|| "none".to_string()),
+                                        current_effective_profile.fps,
+                                        settings_snapshot.fps,
+                                        capture_stack_rss_mb
+                                            .map(|value| value.to_string())
+                                            .unwrap_or_else(|| "none".to_string()),
+                                        capture_stack_cpu_percent
+                                            .map(|value| format!("{value:.1}"))
+                                            .unwrap_or_else(|| "none".to_string()),
+                                        capture_stack_rss_delta_mb
+                                            .map(|value| value.to_string())
+                                            .unwrap_or_else(|| "none".to_string()),
+                                        system_memory_pressure_level
+                                            .clone()
+                                            .unwrap_or_else(|| "none".to_string()),
+                                        thermal_state.clone().unwrap_or_else(|| "none".to_string())
+                                    ));
+                                    self.update_guard_reason_context(
+                                        primary_reason_code.clone(),
+                                        contributing_reason_codes.clone(),
+                                        None,
+                                    );
+                                    return Some(CaptureRestartReason::Overloaded);
+                                }
+                                let suppression_reason = if in_profile_dwell {
+                                    "profile_dwell"
+                                } else if in_profile_cooldown {
+                                    "profile_cooldown"
+                                } else if non_critical_restart_suppressed_for_save {
+                                    "recent_save_suppression"
+                                } else {
+                                    "unknown"
+                                };
+                                self.record_guard_transition(
+                                    "suppressed",
+                                    "suppressed",
+                                    false,
+                                    primary_reason_code.clone(),
+                                    contributing_reason_codes.clone(),
+                                    Some(suppression_reason.to_string()),
+                                    None,
+                                    None,
+                                );
+                                handles.capture.append_runtime_marker(&format!(
+                                    "phase: overload_transition_suppressed reason={} primary_reason_code={} contributing_reason_codes={} signal_count={} required_signals={} hard_triggered={} system_memory_pressure={} thermal_state={}",
+                                    suppression_reason,
+                                    primary_reason_code
+                                        .as_deref()
+                                        .unwrap_or("none"),
+                                    if contributing_reason_codes.is_empty() {
+                                        "none".to_string()
+                                    } else {
+                                        contributing_reason_codes.join(",")
+                                    },
+                                    guard_signals.overload_signal_count,
+                                    guard_signals.sustained_overload_signal_requirement,
+                                    resource_hard_triggered,
+                                    system_memory_pressure_level
+                                        .clone()
+                                        .unwrap_or_else(|| "none".to_string()),
+                                    thermal_state.clone().unwrap_or_else(|| "none".to_string())
+                                ));
+                            }
+                            keep_overload_timer = true;
+                        }
+                    } else {
+                        *overload_since = None;
+                    }
+                } else {
+                    *self.overload_since.lock() = None;
+                    if guard_signals.recovery_signal {
+                        let mut recover_since = self.recover_since.lock();
+                        let started_at = recover_since.get_or_insert(now);
+                        if self.can_step_up_profile() && current_profile_idx > battery_floor {
+                            let recover_hold_secs = match settings_snapshot.profile_recover_hold_secs {
+                                0 => PLAYBACK_RECOVER_HOLD_SECS,
+                                secs => u64::from(secs),
+                            };
+                            let sustained_recovery = now.duration_since(*started_at)
+                                >= Duration::from_secs(recover_hold_secs);
+                            let non_critical_transition_blocked = in_profile_dwell
+                                || in_profile_cooldown
+                                || non_critical_restart_suppressed_for_save;
+                            if sustained_recovery && !non_critical_transition_blocked {
+                                self.update_guard_reason_context(None, Vec::new(), None);
+                                return Some(CaptureRestartReason::ProfileRecovered);
+                            }
+                            keep_recover_timer = true;
+                        } else {
+                            *recover_since = None;
+                        }
+                    } else {
+                        *self.recover_since.lock() = None;
+                    }
+                }
+            } else {
+                *self.overload_since.lock() = None;
+                *self.recover_since.lock() = None;
+            }
+        } else {
+            *self.overload_since.lock() = None;
+            *self.recover_since.lock() = None;
+        }
+
+        if battery_floor > current_profile_idx {
+            let mut floor_since = self.battery_floor_since.lock();
+            let started_at = floor_since.get_or_insert(now);
+            if now.saturating_duration_since(*started_at)
+                >= Duration::from_secs(BATTERY_FLOOR_HOLD_SECS)
+            {
+                *floor_since = None;
+                handles.capture.append_runtime_marker(&format!(
+                    "phase: battery_floor_engaged current_profile_idx={} battery_floor={} battery_max_fps={}",
+                    current_profile_idx, battery_floor, settings_snapshot.battery_max_fps
+                ));
+                self.update_guard_reason_context(
+                    Some("on_battery".to_string()),
+                    vec!["on_battery".to_string()],
+                    None,
+                );
+                return Some(CaptureRestartReason::PowerSourceChanged);
+            }
+        } else if current_profile_idx > battery_floor && *self.battery_floor_engaged.lock() {
+            let mut floor_since = self.battery_floor_since.lock();
+            let started_at = floor_since.get_or_insert(now);
+            if now.saturating_duration_since(*started_at)
+                >= Duration::from_secs(BATTERY_FLOOR_HOLD_SECS)
+            {
+                *floor_since = None;
+                handles.capture.append_runtime_marker(&format!(
+                    "phase: battery_floor_released current_profile_idx={} battery_floor={}",
+                    current_profile_idx, battery_floor
+                ));
+                self.update_guard_reason_context(None, Vec::new(), None);
+                return Some(CaptureRestartReason::PowerSourceChanged);
+            }
+        } else {
+            *self.battery_floor_since.lock() = None;
+        }
+
+        let segment_stall_threshold_ms = {
+            let settings = self.state.lock().settings.clone();
+            segment_stall_threshold_ms(settings.segment_time_ms)
+        };
+        let pipeline_grace = self
+            .last_pipeline_started_at
+            .lock()
+            .map(|started| {
+                now.duration_since(started) < Duration::from_millis(POST_PIPELINE_START_GRACE_MS)
+            })
+            .unwrap_or(false);
+        let save_grace = self
+            .last_save_started_at
+            .lock()
+            .map(|started| {
+                now.duration_since(started) < Duration::from_millis(POST_SAVE_START_GRACE_MS)
+            })
+            .unwrap_or(false);
+        if pipeline_grace || save_grace || !current_session_has_stable_segment {
+            *self.no_segments_miss_count.lock() = 0;
+        } else {
+            let segment_age_ms = handles.capture.latest_segment_age_ms();
+            let adjusted_segment_stall_threshold_ms = self
+                .last_pipeline_started_at
+                .lock()
+                .map(|started| {
+                    if now.duration_since(started)
+                        < Duration::from_millis(POST_PIPELINE_START_GRACE_MS.saturating_mul(4))
+                    {
+                        segment_stall_threshold_ms.max(STARTUP_NO_SEGMENTS_EXTRA_THRESHOLD_MS)
+                    } else {
+                        segment_stall_threshold_ms
+                    }
+                })
+                .unwrap_or(segment_stall_threshold_ms);
+            let stalled = segment_age_ms
+                .map(|age| age > adjusted_segment_stall_threshold_ms)
+                .unwrap_or(true);
+            if stalled {
+                let miss_count = {
+                    let mut misses = self.no_segments_miss_count.lock();
+                    *misses = misses.saturating_add(1);
+                    *misses
+                };
+                handles.capture.append_runtime_marker(&format!(
+                    "phase: no_segments_miss age_ms={} threshold_ms={} miss_count={}",
+                    segment_age_ms
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                    adjusted_segment_stall_threshold_ms,
+                    miss_count
+                ));
+                if miss_count >= NO_SEGMENTS_MISS_REQUIRED {
+                    *self.overload_since.lock() = None;
+                    *self.recover_since.lock() = None;
+                    *self.no_segments_miss_count.lock() = 0;
+                    handles.capture.append_runtime_marker(&format!(
+                        "phase: no_segments_restart age_ms={} threshold_ms={} miss_count={}",
+                        segment_age_ms
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                        adjusted_segment_stall_threshold_ms,
+                        miss_count
+                    ));
+                    return Some(CaptureRestartReason::NoSegments {
+                        segment_age_ms,
+                        threshold_ms: adjusted_segment_stall_threshold_ms,
+                        miss_count,
+                    });
+                }
+            } else {
+                *self.no_segments_miss_count.lock() = 0;
+            }
+        }
+
+        if !keep_overload_timer {
+            *self.overload_since.lock() = None;
+        }
+        if !keep_recover_timer {
+            *self.recover_since.lock() = None;
+        }
+        None
+    }
+}

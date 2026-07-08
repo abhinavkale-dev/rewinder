@@ -142,3 +142,147 @@ final class VoiceProcessingMicPump {
         isRunning = false
         activeMicrophoneID = nil
         activeMicrophoneName = nil
+    }
+
+    private func resolveInputDeviceID(for uid: String) -> AudioDeviceID? {
+        var propSize: UInt32 = 0
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &devicesAddress, 0, nil, &propSize
+        ) == noErr else {
+            return nil
+        }
+
+        let count = Int(propSize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &devicesAddress, 0, nil, &propSize, &deviceIDs
+        ) == noErr else {
+            return nil
+        }
+
+        for id in deviceIDs {
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var cfUID: CFString?
+            var uidSize = UInt32(MemoryLayout<CFString?>.size)
+            if AudioObjectGetPropertyData(id, &uidAddress, 0, nil, &uidSize, &cfUID) == noErr,
+               let deviceUID = cfUID as String?, deviceUID == uid {
+                return id
+            }
+        }
+
+        return nil
+    }
+
+    private func handleTap(buffer: AVAudioPCMBuffer, when: AVAudioTime) {
+        guard let sampleBuffer = makeSampleBuffer(from: buffer, when: when) else {
+            return
+        }
+        sink.ingestMicrophoneSampleBuffer(sampleBuffer)
+    }
+
+    private func makeSampleBuffer(
+        from pcmBuffer: AVAudioPCMBuffer,
+        when: AVAudioTime
+    ) -> CMSampleBuffer? {
+        let frameCount = CMItemCount(pcmBuffer.frameLength)
+        guard frameCount > 0 else {
+            return nil
+        }
+
+        var asbd = pcmBuffer.format.streamDescription.pointee
+        var formatDescription: CMAudioFormatDescription?
+        let formatStatus = CMAudioFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            asbd: &asbd,
+            layoutSize: 0,
+            layout: nil,
+            magicCookieSize: 0,
+            magicCookie: nil,
+            extensions: nil,
+            formatDescriptionOut: &formatDescription
+        )
+        guard formatStatus == noErr, let formatDescription else {
+            return nil
+        }
+
+        let sampleRate = asbd.mSampleRate > 0 ? asbd.mSampleRate : 48_000
+        let pts = CMTime(value: when.sampleTime, timescale: CMTimeScale(sampleRate))
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
+            presentationTimeStamp: pts,
+            decodeTimeStamp: .invalid
+        )
+
+        var sampleBuffer: CMSampleBuffer?
+        let createStatus = CMSampleBufferCreate(
+            allocator: kCFAllocatorDefault,
+            dataBuffer: nil,
+            dataReady: false,
+            makeDataReadyCallback: nil,
+            refcon: nil,
+            formatDescription: formatDescription,
+            sampleCount: frameCount,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleSizeEntryCount: 0,
+            sampleSizeArray: nil,
+            sampleBufferOut: &sampleBuffer
+        )
+        guard createStatus == noErr, let sampleBuffer else {
+            return nil
+        }
+
+        let attachStatus = CMSampleBufferSetDataBufferFromAudioBufferList(
+            sampleBuffer,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+            bufferList: pcmBuffer.audioBufferList
+        )
+        guard attachStatus == noErr else {
+            return nil
+        }
+
+        return sampleBuffer
+    }
+
+    private func registerConfigChangeObserver() {
+        unregisterConfigChangeObserver()
+        configChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            self.queue.async {
+                self.handleFailure(
+                    code: "mic_voice_processing_config_changed",
+                    reason: "audio engine configuration changed"
+                )
+            }
+        }
+    }
+
+    private func unregisterConfigChangeObserver() {
+        if let configChangeObserver {
+            NotificationCenter.default.removeObserver(configChangeObserver)
+            self.configChangeObserver = nil
+        }
+    }
+
+    private func handleFailure(code: String, reason: String) {
+        stop()
+        onFailure(code, reason)
+    }
+}

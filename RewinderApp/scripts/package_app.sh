@@ -93,3 +93,98 @@ if [[ -f "$RNNOISE_MODEL" ]]; then
     mkdir -p "$CONTENTS/Resources/models"
     cp "$RNNOISE_MODEL" "$CONTENTS/Resources/models/bd.rnnn"
 else
+    echo "WARN: RNNoise model not found at $RNNOISE_MODEL; mic noise"
+    echo "      suppression will fall back to the basic afftdn denoiser."
+fi
+
+echo "==> Bundling ffmpeg/ffprobe (self-contained static)"
+# Ship a static, fully self-contained ffmpeg/ffprobe so the app works on any
+# user's Mac (a Homebrew ffmpeg links /opt/homebrew dylibs that won't exist).
+# Defaults to the vendored arm64 static build; auto-fetches it if missing.
+# Override REWINDER_FFMPEG_DIR to point at your own (e.g. LGPL) static build.
+FFMPEG_DIR="${REWINDER_FFMPEG_DIR:-$APP_DIR/vendor/ffmpeg}"
+if [[ ! -x "$FFMPEG_DIR/ffmpeg" || ! -x "$FFMPEG_DIR/ffprobe" ]]; then
+    if [[ "$FFMPEG_DIR" == "$APP_DIR/vendor/ffmpeg" ]]; then
+        echo "    vendored ffmpeg missing; fetching a static build"
+        "$APP_DIR/scripts/fetch_ffmpeg.sh"
+    else
+        echo "ERROR: ffmpeg/ffprobe not found in REWINDER_FFMPEG_DIR=$FFMPEG_DIR" >&2
+        exit 1
+    fi
+fi
+cp "$FFMPEG_DIR/ffmpeg" "$CONTENTS/Resources/bin/ffmpeg"
+cp "$FFMPEG_DIR/ffprobe" "$CONTENTS/Resources/bin/ffprobe"
+
+# Portability guard: refuse to ship an ffmpeg that links non-system libraries
+# (the #1 way a packaged app breaks on machines without Homebrew).
+"$APP_DIR/scripts/verify_ffmpeg.sh" "$CONTENTS/Resources/bin"
+
+echo "==> Code signing"
+# macOS ties permission grants (Screen Recording, Microphone) to the app's code
+# signing identity. Ad-hoc ('-') mints a fresh identity every build, so each
+# rebuild orphans previously granted permissions. Prefer a stable Apple
+# Development identity so grants survive rebuilds. Override with
+# REWINDER_CODESIGN_IDENTITY=...; falls back to ad-hoc if none is available.
+SIGN_ID="${REWINDER_CODESIGN_IDENTITY:-}"
+if [[ -z "$SIGN_ID" ]]; then
+    SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+        | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')"
+fi
+# Local fallback: the self-signed "Rewinder Dev" cert (see DEPLOYMENT.md). Not
+# distributable, but stable — so TCC permission grants survive rebuilds even
+# without an Apple identity on the machine.
+if [[ -z "$SIGN_ID" ]]; then
+    SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+        | awk -F'"' '/Rewinder Dev/ {print $2; exit}')"
+fi
+if [[ -z "$SIGN_ID" ]]; then
+    SIGN_ID="-"
+    echo "    WARN: no Apple Development identity found; using ad-hoc signing."
+    echo "          Permissions will reset on every rebuild. Set"
+    echo "          REWINDER_CODESIGN_IDENTITY to a stable identity to avoid this."
+else
+    echo "    identity: $SIGN_ID"
+fi
+
+# A real identity gets the hardened runtime + a secure timestamp (both required
+# for notarization). Ad-hoc ('-') and the self-signed "Rewinder Dev" cert get
+# neither (timestamps need an Apple-issued identity; the runtime offers nothing
+# for local dev builds).
+RUNTIME_OPT=(--options runtime)
+TIMESTAMP_OPT=(--timestamp)
+if [[ "$SIGN_ID" == "-" || "$SIGN_ID" == "Rewinder Dev" ]]; then
+    RUNTIME_OPT=()
+    TIMESTAMP_OPT=()
+fi
+SIGN_OPTS=()
+SIGN_OPTS+=(${RUNTIME_OPT[@]+"${RUNTIME_OPT[@]}"})
+SIGN_OPTS+=(${TIMESTAMP_OPT[@]+"${TIMESTAMP_OPT[@]}"})
+
+# ffmpeg/ffprobe are now self-contained static binaries (verified above), so they
+# can carry the hardened runtime like the rest of the bundle — required for
+# notarization. (The old Homebrew build had to skip the runtime because it loaded
+# third-party dylibs; that no longer applies.)
+for tool in ffmpeg ffprobe; do
+    BIN="$CONTENTS/Resources/bin/$tool"
+    [[ -f "$BIN" ]] && codesign --force ${SIGN_OPTS[@]+"${SIGN_OPTS[@]}"} --sign "$SIGN_ID" "$BIN"
+done
+
+# The sck_capture helper is our own code: sign it like the app.
+HELPER_BIN="$CONTENTS/Resources/bin/rewinder-sck-capture"
+[[ -f "$HELPER_BIN" ]] && \
+    codesign --force ${SIGN_OPTS[@]+"${SIGN_OPTS[@]}"} --sign "$SIGN_ID" "$HELPER_BIN"
+
+# Any other nested binaries (none expected today): sign defensively.
+for bin in "$CONTENTS/Resources/bin/"*; do
+    case "$(basename "$bin")" in
+        ffmpeg|ffprobe|rewinder-sck-capture) continue ;;
+    esac
+    [[ -f "$bin" ]] && codesign --force ${SIGN_OPTS[@]+"${SIGN_OPTS[@]}"} --sign "$SIGN_ID" "$bin" || true
+done
+
+# Outer app: hardened runtime + secure timestamp + entitlements, signed last.
+codesign --force ${SIGN_OPTS[@]+"${SIGN_OPTS[@]}"} --sign "$SIGN_ID" \
+    --entitlements "$APP_DIR/Resources/Rewinder.entitlements" \
+    "$OUT"
+
+echo "==> Done: $OUT"

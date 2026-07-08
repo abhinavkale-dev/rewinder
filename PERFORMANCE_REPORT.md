@@ -72,3 +72,77 @@ June's report flagged: *"the guard reacts to CPU/RSS/thermal/memory but never to
 
 What it still does **not** do: react to battery *percentage* (only source), or measure Watts (needs `sudo powermetrics`).
 
+---
+
+## 5. Architectural performance analysis
+
+**RAM.** The two big June costs are gone or unchanged‑good:
+- **WebView eliminated** — the single largest resident chunk (~105 MB across 3 WebKit processes) no longer exists in any state.
+- The **engine is a static library** in the app process; UI + engine together (33 MB) now cost about what the bare Rust host alone cost in June (26 MB).
+- The buffer still lives **on disk**, so RAM is flat regardless of buffer length.
+- The remaining big number is the **SCK helper's IOSurface pools** (~100–200 MB) — that's the price of 1080p60 zero‑copy capture on macOS and it's mapped GPU‑shared memory, not heap.
+
+**CPU.** Idle ~0 %. Armed cost is capture delivery + audio DSP; video encode rides the Apple media ASIC. RNNoise is the newest CPU line‑item and is user‑toggleable.
+
+**Battery.** Guard shipped (§4). VideoToolbox encode is power‑efficient; on battery the fps cap halves the capture and encode workload proactively.
+
+**Disk.** Light and bounded (~0.4–1.3 MB/s), old segments roll off, saves are stream copies.
+
+**Process model.** 3 processes, FIFO‑linked capture chain. The engine supervises restarts (`restart_policy.rs`), writes integrity markers (`writer/replay_writer/integrity.rs`), and a crash guard in the app (`CrashGuard.swift`) terminates capture children on fatal signals, addressing June's orphaned‑children observation for abnormal exits.
+
+---
+
+## 6. Fair comparison vs. NVIDIA ShadowPlay / Instant Replay
+
+| Dimension | **Rewinder (macOS, native)** | **NVIDIA ShadowPlay (Windows)** |
+|---|---|---|
+| Capture | ScreenCaptureKit (OS API, app‑layer) | In‑driver GPU framebuffer capture |
+| Encoder | VideoToolbox ASIC | NVENC ASIC — both HW, roughly equivalent |
+| Rolling buffer | Encoded MP4 segments **on disk** (~0 RAM) | Encoded buffer mostly in VRAM/RAM |
+| App/host RAM | **~33 MB UI+engine; ~150–260 MB total armed** | ShadowPlay rides the NVIDIA App/GFE host stack: commonly **200–400 MB+** attributed to "NVIDIA", plus Container/Share processes |
+| CPU | ~0 % idle; encode HW‑offloaded; audio DSP in ffmpeg | ~0 % idle; integrated encode, no separate host process |
+| Battery | **Battery guard: fps cap on battery, restore on AC** | Desktop‑GPU oriented; not a laptop story |
+| Disk write | ~0.4–1.3 MB/s | "High" 1080p60 ≈ 6 MB/s → **~5–12× more than Rewinder** |
+| Dependencies | Self‑contained .app (static ffmpeg bundled) | NVIDIA GPU + driver stack + NVIDIA App |
+
+**Where Rewinder is still heavier/less elegant:** the separate long‑lived `ffmpeg` process (its ~19 MB is cheap, but the SW audio path burns real CPU); and app‑layer capture can't touch driver‑level integration, so more glue (helper + FIFOs) is structural.
+
+**Where the comparison now favors Rewinder more than in June:** the WebView tax is gone entirely — Rewinder's *entire armed footprint* is now comparable to NVIDIA's idle host stack alone, and its UI+engine (33 MB) is smaller than any single WebKit/Electron/GFE component.
+
+---
+
+## 7. Verdict
+
+**Rewinder got meaningfully lighter since June while adding features (RNNoise, battery guard, guard visibility).**
+
+- **RAM:** ~33 MB UI+engine (was ~131 MB); ~150–260 MB total armed (IOSurface‑dominated).
+- **CPU:** ~0 % idle; armed cost dominated by capture delivery + optional mic denoise; encode on the media ASIC.
+- **Disk:** ~5–12× lighter than ShadowPlay.
+- **Battery:** guard shipped — the June report's top opportunity is done.
+
+**Top remaining opportunities (priority order):**
+1. **Replace the `ffmpeg` subprocess with native VideoToolbox/AVAssetWriter + AVAudioEngine DSP** — removes a process, the FIFO glue, and the SW mix/denoise CPU; tightens teardown further.
+2. **Profile RNNoise cost** and consider running `arnndn` only when mic input is above a noise gate, or moving denoise to Apple Voice Isolation when that backend is selected.
+3. **Battery percentage awareness** — the guard reacts to source (AC/battery) but could step down harder below e.g. 20 %.
+
+---
+
+### Appendix — measurement recipe & caveats
+
+```bash
+# Per-process footprint (RSS + CPU)
+ps -axo pid,rss,pcpu,comm | grep -E "Rewinder|rewinder-sck|Resources/bin/ffmpeg"
+
+# Honest "Memory" per process (Activity Monitor's number)
+for p in $(pgrep -f "MacOS/Rewinder|rewinder-sck-capture|Resources/bin/ffmpeg"); do
+  vmmap --summary $p 2>/dev/null | grep "Physical footprint"
+done
+
+# Live buffer size / write rate
+du -sh <output-dir>/.rewinder-live   # segments ≈ 0.5s each; MB ÷ seconds retained = MB/s
+```
+
+- All numbers from a **64 GB** machine under **heavy concurrent load**; capture CPU is an upper bound.
+- `ps` RSS overcounts shared/IOSurface memory; use `vmmap` Physical footprint.
+- The SCK helper's footprint **varies with screen content** (99–204 MB observed live, startup peaks to ~309 MB) — don't mistake a transient for steady state.
+- Capture restarts on guard/battery profile changes by design; the buffer stayed continuous across restarts during measurement (265 segments retained throughout).

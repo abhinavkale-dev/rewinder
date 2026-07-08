@@ -100,3 +100,105 @@ struct RootView: View {
                 }
                 .onAppear { applyPendingNavigation(engine.pendingNavigation) }
         }
+    }
+
+    private func applyPendingNavigation(_ target: AppView?) {
+        guard let target else { return }
+        settingsScrollTarget = nil
+        activeView = target
+        engine.pendingNavigation = nil
+    }
+
+    private var backdrop: some View {
+        Theme.appBackground.ignoresSafeArea()
+    }
+
+    private var topEdgeFade: some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: 0.55),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+            LinearGradient(
+                stops: [
+                    .init(color: Theme.appBackground.opacity(0.9), location: 0),
+                    .init(color: Theme.appBackground.opacity(0.6), location: 0.5),
+                    .init(color: Theme.appBackground.opacity(0), location: 1),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+        }
+        .frame(height: 80)
+        .ignoresSafeArea(edges: .top)
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch activeView {
+        case .home:
+            HomeView(engine: engine) { view, anchor in
+                settingsScrollTarget = anchor
+                activeView = view
+            }
+        case .settings:
+            if let settings = engine.settings {
+                SettingsView(engine: engine, initial: settings, scrollTarget: settingsScrollTarget)
+            } else {
+                HomeView(engine: engine)
+            }
+        case .clips:
+            ClipsView(engine: engine)
+        }
+    }
+
+    private func show(_ target: AppView) {
+        settingsScrollTarget = nil
+        activeView = target
+    }
+
+    private var title: String {
+        switch activeView {
+        case .home: return ""
+        case .settings: return "Settings"
+        case .clips: return "Clips"
+        }
+    }
+
+    private func navToggle(_ target: AppView, symbol: String, help: String) -> some View {
+        Toggle(isOn: Binding(
+            get: { activeView == target },
+            set: { show($0 ? target : .home) }
+        )) {
+            Image(systemName: symbol)
+        }
+        .pointerStyle(.link)
+        .help(help)
+    }
+}
+
+struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { [weak view] in
+            if let window = view?.window { onResolve(window) }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { [weak nsView] in
+            if let window = nsView?.window { onResolve(window) }
+        }
+    }
+}

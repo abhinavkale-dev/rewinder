@@ -77,3 +77,83 @@
         background: radial-gradient(50% 50% at 50% 50%,
           rgba(74,139,245,0.55) 0%,
           rgba(47,109,243,0.25) 52%,
+          rgba(47,109,243,0.0) 74%);
+        pointer-events: none;
+      }
+
+      /* Faint halo behind the app icon up top — ties it into the beam. */
+      .halo {
+        position: absolute;
+        left: 240px;      /* ellipse center (460, 390) */
+        top: 230px;
+        width: 440px;
+        height: 320px;
+        background: radial-gradient(50% 50% at 50% 50%,
+          rgba(47,109,243,0.12) 0%,
+          rgba(47,109,243,0.0) 70%);
+        pointer-events: none;
+      }
+
+      /* Halftone dots at the beam's fringe (Aside's texture), masked so
+         they only live around the glow and melt away outward. */
+      .dots {
+        position: absolute;
+        left: 100px;
+        top: 430px;
+        width: 720px;
+        height: 560px;
+        background-image: radial-gradient(circle,
+          rgba(47,109,243,0.32) 1.6px, transparent 2px);
+        background-size: 22px 22px;
+        -webkit-mask-image: radial-gradient(50% 50% at 50% 58%,
+          rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.3) 48%, transparent 70%);
+        mask-image: radial-gradient(50% 50% at 50% 58%,
+          rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.3) 48%, transparent 70%);
+        pointer-events: none;
+      }
+
+      /* Three chevrons falling toward Applications, light -> dark (the
+         directional cue; sits in the gap between the two live icons). */
+      .arrow {
+        position: absolute;
+        top: 588px;
+        left: 426px;
+        width: 68px;
+        height: 180px;
+      }
+
+      /* Footer — tiny letterspaced mono caps, barely there (Aside's
+         sign-off line). */
+      .footer {
+        position: absolute;
+        bottom: 56px;
+        left: 0;
+        width: 920px;
+        text-align: center;
+        font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+        font-size: 19px;
+        font-weight: 500;
+        letter-spacing: 0.18em;
+        color: #adb7c7;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="halo"></div>
+      <div class="beam"></div>
+      <div class="bloom"></div>
+      <div class="dots"></div>
+
+      <svg class="arrow" viewBox="0 0 68 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <g stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <path d="M17 14 L34 31 L51 14" stroke="#c3cbd9" />
+          <path d="M17 72 L34 89 L51 72" stroke="#8f9bb0" />
+          <path d="M15 130 L34 149 L53 130" stroke="#101826" stroke-width="9" />
+        </g>
+      </svg>
+
+      <div class="footer">&copy; 2026. REWINDER</div>
+    </div>
+  </body>
+</html>

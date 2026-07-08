@@ -61,3 +61,66 @@ struct EngineState: Decodable, Sendable {
     let captureStartPhase: String?
     let audioHealth: String
     let saveStage: String
+    let systemAudioPathReady: Bool
+    let micPermissionStatus: String
+    let micAttachState: String
+    let hotkeyStatus: String
+    var effectiveVideoResolution: Int
+    var effectiveFps: Int
+    let guardState: String
+    let guardPrimaryReasonCode: String?
+    let requestedVideoBitrateKbps: Int
+    let effectiveVideoBitrateKbps: Int
+    let degradeReason: String?
+    let powerSource: String?
+    let isArmed: Bool
+    let isSaving: Bool
+    let armBlocker: String?
+    let armBlockerCode: String?
+    let pendingSave: Bool
+    let bufferFillSecs: Double
+    let replayFillSecs: Double
+    let replayTargetSecs: Double
+    let captureRestartCount: Int
+    let lastError: String?
+    let permission: PermissionState
+    var settings: Settings
+}
+
+struct GuardTransition: Decodable, Sendable {
+    let action: String
+    let guardState: String
+    let hard: Bool
+    let primaryReasonCode: String?
+    let fromProfile: String?
+    let toProfile: String?
+    let sampledAtEpochMs: Double
+}
+
+struct ClipMetadata: Decodable, Sendable, Identifiable {
+    let id: String
+    let path: String
+    let createdAtEpochMs: Double
+    let durationSecs: Double
+    let sizeBytes: Int
+}
+
+struct MicrophoneDevice: Decodable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    let isDefault: Bool
+    let isAvailable: Bool
+}
+
+struct SaveReplayResult: Decodable, Sendable {
+    let ok: Bool
+    let queued: Bool
+    let message: String?
+    let error: String?
+}
+
+struct GrantResult: Decodable, Sendable {
+    let permission: PermissionState
+    let openedSettings: Bool
+    let message: String
+}

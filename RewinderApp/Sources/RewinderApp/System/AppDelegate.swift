@@ -265,3 +265,270 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             let displays = DisplayDevice.connected()
             for (id, item) in displayItems {
                 let display = displays.first { $0.id == id }
+                item.state = display?.isEffectiveSelection(
+                    storedId: settings.selectedDisplayId, in: displays
+                ) == true ? .on : .off
+            }
+        }
+        let isMicMode = settings.audioMode == "system_plus_mic" && settings.micEnabled
+        audioSystemItem?.state = isMicMode ? .off : .on
+        audioMicItem?.state = isMicMode ? .on : .off
+
+        updateAttentionState(state)
+    }
+
+    private func updateAttentionState(_ state: EngineState) {
+        if state.captureHealth == "running" || state.captureHealth == "degraded" {
+            hasSeenCaptureLive = true
+        }
+        let attention = captureAttention(for: state)
+        attentionActive = attention != nil
+        activeAttention = attention
+        updateStatusIcon(attention: attentionActive)
+        updateDockBadge()
+        guard let attention else {
+            lastNotifiedAttentionCode = nil
+            stopReNotifyTimer()
+            return
+        }
+        guard hasSeenCaptureLive, attention.code != lastNotifiedAttentionCode else { return }
+        lastNotifiedAttentionCode = attention.code
+        Notifier.post(title: attention.title, body: attention.body)
+        startReNotifyTimer()
+    }
+
+    private func updateDockBadge() {
+        let minimized = mainWindow?.isMiniaturized ?? false
+        NSApp.dockTile.badgeLabel = (attentionActive && minimized) ? "!" : nil
+    }
+
+    private var isWindowInForeground: Bool {
+        guard let window = mainWindow else { return false }
+        return NSApp.isActive && window.isVisible && !window.isMiniaturized
+    }
+
+    private func startReNotifyTimer() {
+        stopReNotifyTimer()
+        reNotifyTimer = Timer.scheduledTimer(
+            withTimeInterval: reNotifyInterval, repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reNotifyIfStillOff() }
+        }
+    }
+
+    private func stopReNotifyTimer() {
+        reNotifyTimer?.invalidate()
+        reNotifyTimer = nil
+    }
+
+    private func reNotifyIfStillOff() {
+        guard attentionActive, let attention = activeAttention else {
+            stopReNotifyTimer()
+            return
+        }
+        guard !isWindowInForeground else { return }
+        Notifier.post(title: attention.title, body: attention.body)
+    }
+
+    private func captureAttention(
+        for state: EngineState
+    ) -> (code: String, title: String, body: String)? {
+        if state.armBlockerCode == "user_stopped_sharing" {
+            return (
+                "user_stopped_sharing", "Recording stopped",
+                "Screen sharing was stopped. Open Rewinder to restart capture."
+            )
+        }
+        if state.armBlockerCode == "capture_paused" {
+            return (
+                "capture_paused", "Recording paused",
+                "Your replay buffer is not recording. Resume from the menu bar icon."
+            )
+        }
+        if state.lifecycleState == "permission_required" {
+            return (
+                "permission_required", "Recording stopped",
+                "Rewinder lost a required permission and can't record."
+            )
+        }
+        if state.settings.replayEnabled, state.captureHealth == "stopped" {
+            return (
+                "capture_stopped", "Recording stopped",
+                "The replay buffer stopped recording. Open Rewinder to restart it."
+            )
+        }
+        if state.lifecycleState == "disabled",
+           let code = state.armBlockerCode, code != "disabled" {
+            return (
+                code, "Recording stopped",
+                "Rewinder isn't recording. Open it to restart capture."
+            )
+        }
+        return nil
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        Task { @MainActor in
+            self.engine?.pendingNavigation = .home
+            self.showWindow()
+        }
+        completionHandler()
+    }
+
+    private func setupHotkeys() {
+        let manager = HotkeyManager { [weak self] in
+            self?.engine?.saveReplay(hotkey: true)
+        }
+        hotkeys = manager
+        registerHotkeys()
+    }
+
+    private func registerHotkeys() {
+        let primary = engine?.settings?.hotkey ?? "Ctrl+Option+R"
+        let fallbacks = engine?.settings?.fallbackHotkeys ?? []
+        let registration = hotkeys?.register(primary: primary, fallbacks: fallbacks)
+        registeredHotkeySignature = hotkeySignature(primary: primary, fallbacks: fallbacks)
+        if registration?.mode == HotkeyManager.Mode.none {
+            Notifier.post(
+                title: "Save hotkey unavailable",
+                body: "“\(primary)” may conflict with another app. Pick a different shortcut in Settings."
+            )
+        }
+    }
+
+    private func reconcileHotkeys() {
+        guard let settings = engine?.settings else { return }
+        let signature = hotkeySignature(primary: settings.hotkey, fallbacks: settings.fallbackHotkeys)
+        guard signature != registeredHotkeySignature else { return }
+        registerHotkeys()
+    }
+
+    private func hotkeySignature(primary: String, fallbacks: [String]) -> String {
+        ([primary] + fallbacks).joined(separator: "|")
+    }
+
+    private func setupWindow() {
+        guard let window = NSApp.windows.first(where: { $0.canBecomeMain }) ?? NSApp.windows.first else { return }
+        mainWindow = window
+        window.delegate = self
+        window.title = "Rewinder"
+        window.isOpaque = true
+        window.backgroundColor = Theme.appBackgroundNS
+        window.titlebarAppearsTransparent = true
+        showWindow()
+    }
+
+    private func showWindow() {
+        guard let window = mainWindow ?? NSApp.windows.first else { return }
+        mainWindow = window
+        NSApp.setActivationPolicy(.regular)
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        } else {
+            window.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        applyDockIcon()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindow()
+        return true
+    }
+
+    private func applyDockIcon() {
+        guard !Notifier.isBundled else { return }
+        if let appIcon {
+            NSApp.applicationIconImage = appIcon
+        }
+    }
+
+    @objc private func openMainWindow() {
+        engine?.pendingNavigation = .home
+        showWindow()
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        NSApp.setActivationPolicy(.accessory)
+        return false
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) { updateDockBadge() }
+    func windowDidDeminiaturize(_ notification: Notification) { updateDockBadge() }
+
+    @objc private func statusItemClicked() {
+        let menu = buildMenu()
+        updateTrayLabels()
+        statusItem?.menu = menu
+        statusItem?.button?.performClick(nil)
+        statusItem?.menu = nil
+    }
+
+    @objc private func primaryAction() {
+        guard let engine, let state = engine.engineState else { return }
+        switch state.lifecycleState {
+        case "armed", "saving_replay":
+            engine.saveReplay()
+        case "permission_required":
+            engine.grantScreenRecording()
+        case "booting":
+            break
+        case "disabled":
+            if state.armBlockerCode == "capture_paused" {
+                engine.resumeCapture()
+            } else {
+                engine.setReplayEnabled(true)
+            }
+        default:
+            engine.saveReplay()
+        }
+    }
+
+    @objc private func selectResolution(_ sender: NSMenuItem) {
+        engine?.applyPatch(["videoResolution": sender.tag])
+    }
+
+    @objc private func selectDuration(_ sender: NSMenuItem) {
+        engine?.applyPatch(["replayDurationSecs": sender.tag])
+    }
+
+    @objc private func selectDisplay(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        engine?.applyPatch(["selectedDisplayId": id])
+    }
+
+    @objc private func selectAudioSystem() {
+        engine?.applyPatch(["audioMode": "system_only", "micEnabled": false])
+    }
+
+    @objc private func selectAudioMic() {
+        engine?.applyPatch(["audioMode": "system_plus_mic", "micEnabled": true])
+    }
+
+    @objc private func openSettings() {
+        engine?.pendingNavigation = .settings
+        showWindow()
+    }
+
+    @objc private func quit() {
+        engine?.shutdown()
+        NSApp.terminate(nil)
+    }
+}
+
+private extension NSMenuItem {
+    static func suppressAutomaticImages() {
+        let original = #selector(getter: image)
+        let replacement = #selector(rewinder_suppressedImage)
+        guard let originalMethod = class_getInstanceMethod(NSMenuItem.self, original),
+              let newMethod = class_getInstanceMethod(NSMenuItem.self, replacement) else { return }
+        method_exchangeImplementations(originalMethod, newMethod)
+    }
+
+    @objc func rewinder_suppressedImage() -> NSImage? { nil }
+}

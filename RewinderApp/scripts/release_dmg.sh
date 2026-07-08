@@ -69,3 +69,75 @@ if [[ "$IDENTITY" != "-" ]]; then
     APP_ENTITLEMENTS="$(codesign -d --entitlements - --xml "$OUT" 2>/dev/null || true)"
     if grep -q "get-task-allow" <<< "$APP_ENTITLEMENTS"; then
         echo "ERROR: com.apple.security.get-task-allow present (use a Developer ID" >&2
+        echo "       cert, not Apple Development) — notarization would fail." >&2
+        exit 1
+    fi
+fi
+
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+    "$OUT/Contents/Info.plist" 2>/dev/null || echo 0.0.0)"
+mkdir -p "$DIST"
+DMG="$DIST/Rewinder-$VERSION.dmg"
+rm -f "$DMG"
+
+# ── 3. Notarize + staple the .app ─────────────────────────────────────────────
+if [[ "$SKIP_NOTARIZE" == "1" || "$IDENTITY" == "-" ]]; then
+    echo "==> Skipping notarization (REWINDER_SKIP_NOTARIZE/ad-hoc)"
+else
+    echo "==> Notarizing app (profile: $PROFILE)"
+    ZIP="$DIST/Rewinder-$VERSION.zip"
+    /usr/bin/ditto -c -k --keepParent "$OUT" "$ZIP"
+    xcrun notarytool submit "$ZIP" --keychain-profile "$PROFILE" --wait
+    rm -f "$ZIP"
+    echo "==> Stapling app"
+    xcrun stapler staple "$OUT"
+fi
+
+# ── 4. Build the .dmg (app + /Applications drop target) ───────────────────────
+echo "==> Building $DMG"
+if command -v create-dmg >/dev/null 2>&1; then
+    BG_ARGS=()
+    [[ -f "$APP_DIR/Resources/dmg-background.png" ]] && \
+        BG_ARGS=(--background "$APP_DIR/Resources/dmg-background.png")
+    # Portrait Aside-style layout: app on top, Applications below, the
+    # background's blue beam bridging the drag path between them. These
+    # coordinates must match the slots painted in dmg-background.html.
+    create-dmg \
+        --volname "Rewinder" \
+        --window-size 460 640 \
+        --icon-size 110 \
+        --icon "Rewinder.app" 230 195 \
+        --app-drop-link 230 450 \
+        ${BG_ARGS[@]+"${BG_ARGS[@]}"} \
+        --no-internet-enable \
+        "$DMG" "$OUT"
+else
+    echo "    create-dmg not found; using hdiutil (brew install create-dmg for a"
+    echo "    prettier window with a background + drop target)."
+    STAGE="$(mktemp -d)"
+    cp -R "$OUT" "$STAGE/Rewinder.app"
+    ln -s /Applications "$STAGE/Applications"
+    hdiutil create -volname "Rewinder" -srcfolder "$STAGE" -ov \
+        -format UDZO "$DMG"
+    rm -rf "$STAGE"
+fi
+
+# ── 5. Sign + notarize + staple the .dmg ──────────────────────────────────────
+if [[ "$IDENTITY" != "-" ]]; then
+    echo "==> Signing dmg"
+    codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+fi
+if [[ "$SKIP_NOTARIZE" != "1" && "$IDENTITY" != "-" ]]; then
+    echo "==> Notarizing + stapling dmg"
+    xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
+    xcrun stapler staple "$DMG"
+fi
+
+# ── 6. Verify + checksum ──────────────────────────────────────────────────────
+echo "==> Gatekeeper assessment"
+spctl -a -vvv --type install "$DMG" 2>&1 || \
+    echo "    (spctl reports not-notarized; expected for a dry run)"
+echo "==> SHA-256"
+shasum -a 256 "$DMG" | tee "$DMG.sha256"
+
+echo "==> Done: $DMG"

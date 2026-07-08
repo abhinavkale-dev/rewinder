@@ -60,3 +60,65 @@ struct PermissionChips: View {
 
         for item in items where !liveIDs.contains(item.id) {
             switch item.stage {
+            case .checking:
+                if let i = next.firstIndex(where: { $0.id == item.id }) { next[i].stage = .granted }
+                scheduleDrop(item.id)
+            case .idle:
+                next.removeAll { $0.id == item.id }
+            case .granted:
+                break
+            }
+        }
+        for alert in alerts where !items.contains(where: { $0.id == alert.id }) {
+            next.append(ChipItem(alert: alert, stage: .idle))
+        }
+        for alert in alerts {
+            if let i = next.firstIndex(where: { $0.id == alert.id }), next[i].stage != .granted {
+                next[i].alert = alert
+            }
+        }
+
+        if animated { mutate { items = next } } else { items = next }
+    }
+
+    private func scheduleDrop(_ id: String) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            mutate { items.removeAll { $0.id == id } }
+        }
+    }
+
+    private func scheduleCheckingTimeout(_ id: String) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(32))
+            guard let i = items.firstIndex(where: { $0.id == id }), items[i].stage == .checking else { return }
+            mutate { items[i].stage = .idle }
+        }
+    }
+
+    private func mutate(_ change: () -> Void) {
+        if let spring { withAnimation(spring, change) } else { change() }
+    }
+
+    private func checkingVerb(_ kind: AlertKind) -> String {
+        switch kind {
+        case .resume: return "Resuming…"
+        case .restart: return "Restarting…"
+        default: return "Checking…"
+        }
+    }
+
+    private func doneVerb(_ kind: AlertKind) -> String {
+        switch kind {
+        case .resume: return "Resumed"
+        case .restart: return "Restarted"
+        default: return "Granted"
+        }
+    }
+}
+
+struct ChipItem: Identifiable {
+    var alert: HomeAlert
+    var stage: PermissionChip.Stage
+    var id: String { alert.id }
+}
