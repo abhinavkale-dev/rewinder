@@ -109,3 +109,114 @@ struct OnboardingView: View {
             maxWidth: 400,
             maxHeight: step == .welcome ? welcomeMaxHeight : .infinity,
             alignment: step == .welcome ? .top : .center
+        )
+        .frame(maxHeight: .infinity)
+    }
+
+    private var getStartedPanel: some View {
+        VStack(spacing: 8) {
+            Text("Welcome to Rewinder")
+                .font(.system(size: 26, weight: .bold))
+                .foregroundStyle(.primary)
+            Text("Your screen's last moments, always ready to save.")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                advanceToWelcome()
+            } label: {
+                Text("Get Started")
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.glassProminent)
+            .controlSize(.large)
+            .tint(Theme.accent)
+            .pointerStyle(.link)
+            .padding(.top, 12)
+        }
+    }
+
+    private var introBackdrop: some View {
+        ZStack {
+            RewindRipple(delay: 0)
+            RewindRipple(delay: 0.18)
+        }
+        .frame(width: 260, height: 260)
+        .allowsHitTesting(false)
+    }
+
+    private var brandLockup: some View {
+        VStack(spacing: 6) {
+            Text("Welcome to")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                RewinderRMark(color: .primary, height: 30)
+                Text("Rewinder")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(.primary)
+            }
+        }
+    }
+
+    private var permissionRows: some View {
+        VStack(spacing: 12) {
+            permissionRow(
+                icon: "display",
+                title: "Screen Recording",
+                subtitle: "Required, so Rewinder can capture your screen.",
+                requestingSubtitle: "Waiting for you to enable it in System Settings…",
+                granted: screenGranted,
+                requesting: screenRequesting
+            ) { startScreenRequest() }
+
+            permissionRow(
+                icon: "mic.fill",
+                title: "Microphone",
+                subtitle: "Optional — mix your voice into saved replays.",
+                requestingSubtitle: "Approve the system prompt…",
+                granted: micGranted,
+                requesting: micRequesting
+            ) { startMicRequest() }
+        }
+        .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: screenGranted)
+        .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: micGranted)
+        .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: screenRequesting)
+        .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: micRequesting)
+    }
+
+    private func permissionRow(
+        icon: String,
+        title: String,
+        subtitle: String,
+        requestingSubtitle: String,
+        granted: Bool,
+        requesting: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isRequesting = requesting && !granted
+        return HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+                .symbolEffect(.pulse, isActive: isRequesting && !reduceMotion)
+                .foregroundStyle(granted ? Theme.success : Theme.accent)
+                .frame(width: 44, height: 44)
+                .glassEffect(.regular, in: .rect(cornerRadius: 12))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(isRequesting ? requestingSubtitle : subtitle)
+                    .font(.caption)
+                    .foregroundStyle(isRequesting ? Theme.accent : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            if granted {
