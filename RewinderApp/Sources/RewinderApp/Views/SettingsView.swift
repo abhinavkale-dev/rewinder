@@ -9,6 +9,11 @@ struct SettingsView: View {
     @State private var showTroubleshooting = false
     @State private var showResetConfirmation = false
     @State private var didJustSave = false
+    // App-side preference (not an engine setting): mutes the save-confirmation
+    // chime. Stored in UserDefaults, but staged through the same draft/Save
+    // flow as engine settings so the Save button behaves consistently.
+    @AppStorage("saveSoundEnabled") private var saveSoundEnabled = true
+    @State private var draftSaveSound: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let scrollTarget: String?
 
@@ -16,6 +21,9 @@ struct SettingsView: View {
         self.engine = engine
         self.scrollTarget = scrollTarget
         _draft = State(initialValue: initial)
+        _draftSaveSound = State(
+            initialValue: UserDefaults.standard.object(forKey: "saveSoundEnabled") as? Bool ?? true
+        )
     }
 
     private static let audioModes = [
@@ -320,6 +328,12 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.white.opacity(0.04), in: .rect(cornerRadius: 8))
                 caption("Clips save here automatically.")
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Play sound when a clip saves", isOn: $draftSaveSound)
+                        .padding(.top, 6)
+                    caption("The confirmation chime after a successful save.")
+                }
             }
         }
     }
@@ -531,6 +545,8 @@ struct SettingsView: View {
     private func resetToDefaults() {
         guard let defaults = engine.defaultSettings() else { return }
         draft = defaults
+        draftSaveSound = true
+        saveSoundEnabled = true
         engine.submitSettings(defaults)
     }
 
@@ -539,7 +555,9 @@ struct SettingsView: View {
     private var savePhase: SavePhase {
         if engine.isSubmittingSettings { return .saving }
         if didJustSave { return .saved }
-        return draft == engine.settings ? .clean : .dirty
+        let engineClean = draft == engine.settings
+        let appPrefsClean = draftSaveSound == saveSoundEnabled
+        return engineClean && appPrefsClean ? .clean : .dirty
     }
 
     private var saveTitle: String {
@@ -571,6 +589,7 @@ struct SettingsView: View {
 
     private var saveButton: some View {
         Button {
+            saveSoundEnabled = draftSaveSound
             engine.submitSettings(draft)
         } label: {
             saveButtonLabel

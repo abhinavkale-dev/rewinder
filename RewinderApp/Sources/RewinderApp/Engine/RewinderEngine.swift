@@ -333,7 +333,11 @@ final class RewinderEngine {
                 }
                 saveConfirmations &+= 1
                 onClipSaved?()
-                Notifier.playCue(bundled: "save-chime", fallback: "Glass")
+                // The chime is muteable in Settings > Saving ("saveSoundEnabled",
+                // default on; missing key reads as enabled).
+                if UserDefaults.standard.object(forKey: "saveSoundEnabled") as? Bool ?? true {
+                    Notifier.playCue(bundled: "save-chime", fallback: "Glass")
+                }
                 if !NSApp.isActive {
                     Notifier.post(title: "Replay saved", body: clipSavedStatus(json), sound: false)
                 }
