@@ -148,7 +148,7 @@ struct HomeView: View {
     private func flashGuardTransition() {
         guard let transition = engine.lastGuardTransition else { return }
         let message = transition.action == "step_up"
-            ? "Full quality restored — back to your chosen settings."
+            ? "Full quality restored. Back to your chosen settings."
             : "Quality lowered to keep recording smooth."
         guardFlashTask?.cancel()
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { guardFlash = message }
@@ -275,7 +275,7 @@ struct HomeView: View {
                         if showReplayOffHint {
                             HStack(alignment: .firstTextBaseline, spacing: 5) {
                                 Image(systemName: "power")
-                                Text("Replay is off — tap the ring above to turn it on.")
+                                Text("Replay is off. Tap the ring above to turn it on.")
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             .font(.caption)
@@ -349,7 +349,7 @@ struct HomeView: View {
                     } else if showQualityHint {
                         HStack(alignment: .firstTextBaseline, spacing: 5) {
                             Image(systemName: "arrow.triangle.2.circlepath")
-                            Text("Applying new quality — your buffer refills for a moment.")
+                            Text("Applying new quality. Your buffer refills for a moment.")
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .font(.caption)
@@ -444,7 +444,7 @@ struct HomeView: View {
         guard fpsLow || resLow || bitrateLow else { return nil }
 
         if !fpsLow && !resLow {
-            return "Bitrate auto-lowered to keep recording smooth — restores when your Mac catches up."
+            return "Bitrate auto-lowered to keep recording smooth. Restores when your Mac catches up."
         }
 
         var targets: [String] = []
@@ -455,9 +455,9 @@ struct HomeView: View {
         if fpsLow, state.settings.batteryGuardEnabled,
            state.powerSource == "battery",
            state.effectiveFps <= state.settings.batteryMaxFps {
-            return "Battery saver: \(target) to save power — full quality when you plug in."
+            return "Battery saver: \(target) to save power. Full quality when you plug in."
         }
-        return "Auto-lowered to \(target) to avoid dropped frames — restores when your Mac catches up."
+        return "Auto-lowered to \(target) to avoid dropped frames. Restores when your Mac catches up."
     }
 
     private func displayedFps(_ state: EngineState) -> Int {

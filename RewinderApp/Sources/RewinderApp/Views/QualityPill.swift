@@ -42,7 +42,7 @@ struct QualityPill: View, Equatable {
                 }
                 .pickerStyle(.inline)
                 if fpsAutoLowered {
-                    Text("Auto-lowered to protect capture — returns to \(fps) fps automatically.")
+                    Text("Auto-lowered to protect capture. Returns to \(fps) fps automatically.")
                 }
             }
             divider
@@ -54,7 +54,7 @@ struct QualityPill: View, Equatable {
                 }
                 .pickerStyle(.inline)
                 if resolutionAutoLowered {
-                    Text("Auto-lowered to protect capture — returns to \(resolution)p automatically.")
+                    Text("Auto-lowered to protect capture. Returns to \(resolution)p automatically.")
                 }
             }
         }

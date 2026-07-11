@@ -26,8 +26,8 @@ struct PowerButton: View {
         case .off: return "Turn replay on"
         case .permission: return "Screen Recording permission needed"
         case .saving: return "Saving your replay"
-        case .protected: return "Protected — turn replay off"
-        case .building, .starting: return "Replay on — turn off"
+        case .protected: return "Protected. Turn replay off"
+        case .building, .starting: return "Replay on. Turn off"
         }
     }
 

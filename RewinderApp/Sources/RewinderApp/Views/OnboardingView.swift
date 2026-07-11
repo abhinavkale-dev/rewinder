@@ -176,7 +176,7 @@ struct OnboardingView: View {
             permissionRow(
                 icon: "mic.fill",
                 title: "Microphone",
-                subtitle: "Optional — mix your voice into saved replays.",
+                subtitle: "Optional. Mix your voice into saved replays.",
                 requestingSubtitle: "Approve the system prompt…",
                 granted: micGranted,
                 requesting: micRequesting

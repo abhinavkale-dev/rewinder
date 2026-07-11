@@ -8,7 +8,7 @@ enum CrashGuard {
     private nonisolated(unsafe) static var installed = false
 
     private nonisolated(unsafe) static let signalMarker: [UInt8] =
-        Array("rewinder: fatal signal — capture children terminated\n".utf8)
+        Array("rewinder: fatal signal, capture children terminated\n".utf8)
 
     static func updatePaths(outputDir: String?) {
         guard let dir = outputDir, !dir.isEmpty else { return }
