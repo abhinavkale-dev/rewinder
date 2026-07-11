@@ -269,7 +269,8 @@ impl CaptureEngine {
             ),
         );
 
-        let attempts = requested_audio_attempts(&settings, startup_strategy);
+        let output_echo_prone = probe_output_echo_prone(&helper_bin, &capture_log_path);
+        let attempts = requested_audio_attempts(&settings, startup_strategy, output_echo_prone);
 
         let mut startup: Option<CaptureStartup> = None;
         let mut mode_errors: Vec<String> = Vec::new();

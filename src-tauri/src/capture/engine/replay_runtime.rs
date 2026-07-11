@@ -528,6 +528,10 @@ impl CaptureEngine {
         self.log_metrics().queue_starvation_detected
     }
 
+    pub fn has_audio_route_changed(&self) -> bool {
+        self.log_metrics().audio_route_changed
+    }
+
     pub fn live_queue_profile(&self) -> LiveQueueProfile {
         self.queue_profile
     }

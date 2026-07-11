@@ -39,6 +39,7 @@ const NO_SEGMENTS_MISS_REQUIRED: u8 = 2;
 const POST_PIPELINE_START_GRACE_MS: u64 = 3_500;
 const POST_SAVE_START_GRACE_MS: u64 = 2_500;
 const DISPLAY_CHANGE_DEBOUNCE_MS: u64 = 800;
+const AUDIO_ROUTE_RESTART_COOLDOWN_SECS: u64 = 15;
 const RESTART_LOOP_WINDOW_SECS: u64 = 20;
 const RESTART_LOOP_MAX_ATTEMPTS: usize = 3;
 const RESTART_LOOP_COOLDOWN_SECS: u64 = 10;
@@ -163,6 +164,7 @@ enum CaptureRestartReason {
     CaptureProcessExited,
     DisplayChanged,
     PowerSourceChanged,
+    AudioRouteChanged,
 }
 
 impl CaptureRestartReason {
@@ -177,6 +179,7 @@ impl CaptureRestartReason {
             Self::CaptureProcessExited => "capture_process_exited",
             Self::DisplayChanged => "display_changed",
             Self::PowerSourceChanged => "power_source_changed",
+            Self::AudioRouteChanged => "audio_route_changed",
         }
     }
 
@@ -193,6 +196,7 @@ impl CaptureRestartReason {
             Self::CaptureProcessExited => "Capture process exited; restarting.",
             Self::DisplayChanged => "Display source changed; restarting capture.",
             Self::PowerSourceChanged => "Power source changed; adjusting quality.",
+            Self::AudioRouteChanged => "Audio output changed; matching mic backend.",
         }
     }
 
@@ -248,6 +252,7 @@ pub struct Engine {
     overload_since: Mutex<Option<Instant>>,
     recover_since: Mutex<Option<Instant>>,
     last_mic_retry_at: Mutex<Option<Instant>>,
+    last_audio_route_restart_at: Mutex<Option<Instant>>,
     no_segments_miss_count: Mutex<u8>,
     last_pipeline_started_at: Mutex<Option<Instant>>,
     last_save_started_at: Mutex<Option<Instant>>,
@@ -306,6 +311,7 @@ impl Engine {
             overload_since: Mutex::new(None),
             recover_since: Mutex::new(None),
             last_mic_retry_at: Mutex::new(None),
+            last_audio_route_restart_at: Mutex::new(None),
             no_segments_miss_count: Mutex::new(0),
             last_pipeline_started_at: Mutex::new(None),
             last_save_started_at: Mutex::new(None),

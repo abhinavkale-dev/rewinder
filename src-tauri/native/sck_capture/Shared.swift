@@ -33,6 +33,7 @@ struct CaptureConfig {
     let selectedMicrophoneID: String?
     let micRetryIntervalSecs: Int
     let boostMicVolume: Bool
+    let watchAudioRoute: Bool
     let parentPID: pid_t?
     let ffmpegPID: pid_t?
 }

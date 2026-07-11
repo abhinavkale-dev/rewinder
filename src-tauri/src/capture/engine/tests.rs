@@ -10,7 +10,8 @@ use super::{
     parse_latest_mic_samples_per_sec, parse_latest_selected_microphone_name,
     parse_latest_system_memory_pressure_level, parse_latest_video_frame_drop_total,
     parse_latest_video_output_fps, parse_latest_video_queue_overflow_count, process_is_running,
-    replay_continuity_gap_threshold, requested_audio_modes, segment_time_delta_for_fps,
+    replay_continuity_gap_threshold, requested_audio_attempts, requested_audio_modes,
+    segment_time_delta_for_fps,
     select_capture_process_sweep_candidates, startup_timeout_guidance, startup_timeout_reason_code,
     terminate_stale_capture_process, AudioMode, AudioStartupStrategy, CaptureEngine, CapturePipes,
     LiveQueueProfile, MicAttachRuntimeState, SegmentFile,
@@ -218,6 +219,72 @@ fn best_effort_mic_prefers_mic_when_upgrade_strategy_requested() {
     assert_eq!(modes.len(), 2);
     assert_eq!(modes[0].as_str(), "system_plus_mic");
     assert_eq!(modes[1].as_str(), "system_only");
+}
+
+#[test]
+fn auto_backend_prefers_echo_cancellation_for_speaker_output() {
+    let mut settings = SettingsDto::default();
+    settings.audio_mode = "system_plus_mic".to_string();
+    settings.mic_enabled = true;
+    settings.mic_failure_policy = "best_effort".to_string();
+    settings.mic_capture_backend = "auto".to_string();
+    let attempts = requested_audio_attempts(&settings, AudioStartupStrategy::SystemFirst, true);
+    let mixed_backends: Vec<&str> = attempts
+        .iter()
+        .filter(|attempt| attempt.mode == AudioMode::SystemPlusMic)
+        .map(|attempt| attempt.mic_backend.as_str())
+        .collect();
+    assert_eq!(
+        mixed_backends,
+        vec!["voice_isolation", "sck_native", "avcapture"]
+    );
+}
+
+#[test]
+fn auto_backend_skips_echo_cancellation_for_headphone_output() {
+    let mut settings = SettingsDto::default();
+    settings.audio_mode = "system_plus_mic".to_string();
+    settings.mic_enabled = true;
+    settings.mic_failure_policy = "best_effort".to_string();
+    settings.mic_capture_backend = "auto".to_string();
+    let attempts = requested_audio_attempts(&settings, AudioStartupStrategy::SystemFirst, false);
+    let mixed_backends: Vec<&str> = attempts
+        .iter()
+        .filter(|attempt| attempt.mode == AudioMode::SystemPlusMic)
+        .map(|attempt| attempt.mic_backend.as_str())
+        .collect();
+    assert_eq!(mixed_backends, vec!["sck_native", "avcapture"]);
+}
+
+#[test]
+fn explicit_backend_is_not_overridden_by_auto_ordering() {
+    let mut settings = SettingsDto::default();
+    settings.audio_mode = "system_plus_mic".to_string();
+    settings.mic_enabled = true;
+    settings.mic_failure_policy = "best_effort".to_string();
+    settings.mic_capture_backend = "sck_native".to_string();
+    let attempts = requested_audio_attempts(&settings, AudioStartupStrategy::SystemFirst, true);
+    let mixed_backends: Vec<&str> = attempts
+        .iter()
+        .filter(|attempt| attempt.mode == AudioMode::SystemPlusMic)
+        .map(|attempt| attempt.mic_backend.as_str())
+        .collect();
+    assert_eq!(mixed_backends, vec!["sck_native"]);
+}
+
+#[test]
+fn log_metrics_detect_audio_route_change_marker() {
+    let mut cache = super::LogMetricsCache::default();
+    super::refresh_log_metrics_from_window(
+        &mut cache,
+        "phase: audio_route_watch_started echo_prone=0\n",
+    );
+    assert!(!cache.audio_route_changed);
+    super::refresh_log_metrics_from_window(
+        &mut cache,
+        "phase: audio_output_route_changed transport=builtin source=internal_speaker echo_prone=1\n",
+    );
+    assert!(cache.audio_route_changed);
 }
 
 #[test]

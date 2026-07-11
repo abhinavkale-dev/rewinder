@@ -40,6 +40,7 @@ pub(super) fn requested_audio_modes(
 pub(super) fn requested_audio_attempts(
     settings: &SettingsDto,
     startup_strategy: AudioStartupStrategy,
+    output_echo_prone: bool,
 ) -> Vec<AudioAttemptPlan> {
     let _ = startup_strategy;
     let normalized_backend = normalize_mic_backend_label(&settings.mic_capture_backend);
@@ -49,6 +50,12 @@ pub(super) fn requested_audio_attempts(
         if mode == AudioMode::SystemPlusMic && settings.mic_enabled {
             match normalized_backend.as_str() {
                 "auto" => {
+                    if output_echo_prone {
+                        attempts.push(AudioAttemptPlan {
+                            mode,
+                            mic_backend: "voice_isolation".to_string(),
+                        });
+                    }
                     attempts.push(AudioAttemptPlan {
                         mode,
                         mic_backend: "sck_native".to_string(),
@@ -72,6 +79,36 @@ pub(super) fn requested_audio_attempts(
     }
 
     attempts
+}
+
+pub(super) fn probe_output_echo_prone(helper_bin: &str, capture_log_path: &Path) -> bool {
+    match Command::new(helper_bin).arg("--probe-audio-output").output() {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let line = stdout
+                .lines()
+                .find(|line| line.starts_with("audio_output"))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if line.is_empty() {
+                append_capture_log_line(
+                    capture_log_path,
+                    "phase: audio_output_probe_empty (assuming echo-prone)",
+                );
+                return true;
+            }
+            append_capture_log_line(capture_log_path, &format!("phase: {line}"));
+            !line.contains("echo_prone=0")
+        }
+        Err(err) => {
+            append_capture_log_line(
+                capture_log_path,
+                &format!("phase: audio_output_probe_failed err={err} (assuming echo-prone)"),
+            );
+            true
+        }
+    }
 }
 
 pub(super) fn normalize_mic_backend_label(value: &str) -> String {
@@ -477,6 +514,15 @@ pub(super) fn spawn_sck_helper_child(
         .to_string(),
         "--mic-backend".to_string(),
         mic_backend.to_string(),
+        "--watch-audio-route".to_string(),
+        if mode.has_mic()
+            && normalize_mic_backend_label(&settings.mic_capture_backend) == "auto"
+        {
+            "1"
+        } else {
+            "0"
+        }
+        .to_string(),
         "--mic-retry-interval-secs".to_string(),
         settings.mic_retry_interval_secs.to_string(),
         "--parent-pid".to_string(),

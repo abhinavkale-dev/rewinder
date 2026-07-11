@@ -678,6 +678,7 @@ pub(super) struct LogMetricsCache {
     pub mic_sustained_silence: bool,
     pub mic_selected_device_not_found: bool,
     pub queue_starvation_detected: bool,
+    pub audio_route_changed: bool,
 }
 
 pub(super) fn refresh_log_metrics_from_window(cache: &mut LogMetricsCache, log: &str) {
@@ -725,4 +726,5 @@ pub(super) fn refresh_log_metrics_from_window(cache: &mut LogMetricsCache, log: 
     cache.mic_sustained_silence |= log.contains(MIC_SUSTAINED_SILENCE_MARKER);
     cache.mic_selected_device_not_found |= has_mic_selected_device_not_found_marker(log);
     cache.queue_starvation_detected |= log.contains(FFMPEG_QUEUE_STARVATION_MARKER);
+    cache.audio_route_changed |= log.contains("phase: audio_output_route_changed");
 }

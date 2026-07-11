@@ -20,6 +20,15 @@ struct RewinderSCKCapture {
             exit(granted ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--probe-audio-output") {
+            let result = AudioOutputProbe.probe()
+            print(
+                "audio_output transport=\(result.transport) source=\(result.source) "
+                    + "echo_prone=\(result.echoProne ? "1" : "0")"
+            )
+            exit(0)
+        }
+
         if CommandLine.arguments.contains("--list-microphones") {
             do {
                 try listMicrophones()
@@ -192,6 +201,7 @@ struct RewinderSCKCapture {
         }
         let micRetryIntervalSecs = Int(value(for: "--mic-retry-interval-secs") ?? "15") ?? 15
         let boostMicVolume = (value(for: "--boost-mic-volume") ?? "0") == "1"
+        let watchAudioRoute = (value(for: "--watch-audio-route") ?? "0") == "1"
         let parentPID = value(for: "--parent-pid").flatMap { pid_t($0) }
         let ffmpegPID = value(for: "--ffmpeg-pid").flatMap { pid_t($0) }
 
@@ -223,6 +233,7 @@ struct RewinderSCKCapture {
             selectedMicrophoneID: selectedMicrophoneID,
             micRetryIntervalSecs: max(micRetryIntervalSecs, 1),
             boostMicVolume: boostMicVolume,
+            watchAudioRoute: watchAudioRoute,
             parentPID: parentPID,
             ffmpegPID: ffmpegPID
         )

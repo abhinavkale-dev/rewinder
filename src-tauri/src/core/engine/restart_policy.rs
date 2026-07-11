@@ -33,6 +33,19 @@ impl Engine {
         {
             return Some(CaptureRestartReason::DisplayChanged);
         }
+        if handles.capture.has_audio_route_changed() {
+            let in_cooldown = self
+                .last_audio_route_restart_at
+                .lock()
+                .map(|at| {
+                    at.elapsed() < Duration::from_secs(AUDIO_ROUTE_RESTART_COOLDOWN_SECS)
+                })
+                .unwrap_or(false);
+            if !in_cooldown {
+                *self.last_audio_route_restart_at.lock() = Some(Instant::now());
+                return Some(CaptureRestartReason::AudioRouteChanged);
+            }
+        }
         if let Some(error) = handles.capture.last_error() {
             *self.overload_since.lock() = None;
             *self.recover_since.lock() = None;

@@ -13,6 +13,7 @@ final class CaptureController {
     private var output: CaptureOutput?
     private var micPump: MicCapturePump?
     private var voicePump: VoiceProcessingMicPump?
+    private var routeWatcher: AudioRouteWatcher?
     private var micRetryTimer: DispatchSourceTimer?
     private var micRetryAttempt = 0
     private var volumeManager: MicrophoneVolumeManager?
@@ -156,6 +157,12 @@ final class CaptureController {
             }
         }
 
+        if config.watchAudioRoute {
+            let watcher = AudioRouteWatcher(initialEchoProne: AudioOutputProbe.probe().echoProne)
+            watcher.start()
+            routeWatcher = watcher
+        }
+
         fputs(
             "ScreenCaptureKit started: display=\(config.displayIndex) size=\(config.width)x\(config.height) fps=\(config.fps) system_audio=\(config.enableSystemAudio) mic=\(config.enableMic) mic_backend=\(config.micBackend) sample_rate=\(config.audioSampleRate) channels=\(config.audioChannels) excludes_self_audio=\(config.excludeCurrentProcessAudio)\n",
             stderr
@@ -176,6 +183,8 @@ final class CaptureController {
         fflush(stderr)
 
         stopSystemPressureObservers()
+        routeWatcher?.stop()
+        routeWatcher = nil
         volumeManager?.restore()
         volumeManager = nil
         output?.beginShutdown()
@@ -249,6 +258,8 @@ final class CaptureController {
         micPump = nil
         voicePump?.stop()
         voicePump = nil
+        routeWatcher?.stop()
+        routeWatcher = nil
         stopSystemPressureObservers()
 
         fputs("phase: helper_shutdown_complete cause=\(cause)\n", stderr)
