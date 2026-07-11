@@ -44,6 +44,8 @@ final class RewinderEngine {
 
     @ObservationIgnored var onClipSaved: (@MainActor () -> Void)?
 
+    @ObservationIgnored var onBufferStarted: (@MainActor () -> Void)?
+
     @ObservationIgnored nonisolated(unsafe) private var handle: OpaquePointer?
     @ObservationIgnored private var permissionPollTask: Task<Void, Never>?
 
@@ -68,7 +70,9 @@ final class RewinderEngine {
             statusLine = bootError!
             return
         }
-        if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+        if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+            || UserDefaults.standard.bool(forKey: "minimizeOnBufferStart")
+        {
             if let result = rewinder_set_replay_enabled(handle, false) {
                 rewinder_free_string(result)
             }
@@ -169,6 +173,9 @@ final class RewinderEngine {
         }
         offload({ rewinder_set_replay_enabled($0, enabled) }) { [weak self] text in
             self?.applyStateEnvelopeText(text)
+        }
+        if enabled {
+            onBufferStarted?()
         }
     }
 
@@ -333,8 +340,6 @@ final class RewinderEngine {
                 }
                 saveConfirmations &+= 1
                 onClipSaved?()
-                // The chime is muteable in Settings > Saving ("saveSoundEnabled",
-                // default on; missing key reads as enabled).
                 if UserDefaults.standard.object(forKey: "saveSoundEnabled") as? Bool ?? true {
                     Notifier.playCue(bundled: "save-chime", fallback: "Glass")
                 }
@@ -349,10 +354,10 @@ final class RewinderEngine {
             Notifier.post(title: "Couldn't save replay", body: "Rewinder couldn't write the clip. Try again.", sound: false)
             Notifier.playCue("Basso")
         case "rewinder://save-deferred":
-            statusLine = "Save deferred — buffer still warming up"
+            statusLine = "Save deferred: buffer still warming up"
             Notifier.playCue(bundled: "save-denied")
             if !NSApp.isActive {
-                Notifier.post(title: "Buffer still warming up", body: "Try again in a moment — your replay isn't ready yet.", sound: false)
+                Notifier.post(title: "Buffer still warming up", body: "Try again in a moment. Your replay isn't ready yet.", sound: false)
             }
         case "rewinder://permission-required":
             statusLine = "Permission required"
@@ -386,7 +391,7 @@ final class RewinderEngine {
         let secs = Int(clip.durationSecs.rounded())
         let target = engineState?.settings.replayDurationSecs ?? 0
         if target > 0, clip.durationSecs + 2 < Double(target) {
-            return "Saved last \(secs)s — buffer was still rebuilding"
+            return "Saved last \(secs)s (buffer was still rebuilding)"
         }
         return "Saved last \(secs)s"
     }

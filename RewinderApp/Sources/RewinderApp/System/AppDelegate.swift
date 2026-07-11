@@ -75,6 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         engine.onClipSaved = { [weak self] in
             self?.winkTray()
         }
+        engine.onBufferStarted = { [weak self] in
+            self?.minimizeOnBufferStartIfEnabled()
+        }
         updateTrayLabels()
     }
 
@@ -437,7 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showWindow()
-        return true
+        return false
     }
 
     private func applyDockIcon() {
@@ -454,12 +457,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
-        NSApp.setActivationPolicy(.accessory)
+        if !(UserDefaults.standard.object(forKey: "closeKeepsDockIcon") as? Bool ?? true) {
+            NSApp.setActivationPolicy(.accessory)
+        }
         return false
     }
 
     func windowDidMiniaturize(_ notification: Notification) { updateDockBadge() }
     func windowDidDeminiaturize(_ notification: Notification) { updateDockBadge() }
+
+    private func minimizeOnBufferStartIfEnabled() {
+        guard UserDefaults.standard.bool(forKey: "minimizeOnBufferStart"),
+              let window = mainWindow,
+              window.isVisible, !window.isMiniaturized else { return }
+        window.miniaturize(nil)
+    }
 
     @objc private func statusItemClicked() {
         let menu = buildMenu()

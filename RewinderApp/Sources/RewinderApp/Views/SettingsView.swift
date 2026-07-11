@@ -9,11 +9,12 @@ struct SettingsView: View {
     @State private var showTroubleshooting = false
     @State private var showResetConfirmation = false
     @State private var didJustSave = false
-    // App-side preference (not an engine setting): mutes the save-confirmation
-    // chime. Stored in UserDefaults, but staged through the same draft/Save
-    // flow as engine settings so the Save button behaves consistently.
     @AppStorage("saveSoundEnabled") private var saveSoundEnabled = true
+    @AppStorage("closeKeepsDockIcon") private var closeKeepsDockIcon = true
+    @AppStorage("minimizeOnBufferStart") private var minimizeOnBufferStart = false
     @State private var draftSaveSound: Bool
+    @State private var draftCloseKeepsDock: Bool
+    @State private var draftMinimizeOnBufferStart: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let scrollTarget: String?
 
@@ -24,6 +25,12 @@ struct SettingsView: View {
         _draftSaveSound = State(
             initialValue: UserDefaults.standard.object(forKey: "saveSoundEnabled") as? Bool ?? true
         )
+        _draftCloseKeepsDock = State(
+            initialValue: UserDefaults.standard.object(forKey: "closeKeepsDockIcon") as? Bool ?? true
+        )
+        _draftMinimizeOnBufferStart = State(
+            initialValue: UserDefaults.standard.bool(forKey: "minimizeOnBufferStart")
+        )
     }
 
     private static let audioModes = [
@@ -32,10 +39,10 @@ struct SettingsView: View {
         ("video_only", "Video only"),
     ]
     private static let micBackends = [
-        ("auto", "Automatic"),
+        ("auto", "Automatic (recommended)"),
         ("sck_native", "ScreenCaptureKit"),
         ("avcapture", "AVCapture"),
-        ("voice_isolation", "Apple Voice Isolation (calls; lowers system volume)"),
+        ("voice_isolation", "Apple Voice Isolation (echo cancellation)"),
     ]
     private static let savePathModes = [
         ("instant_mp4", "Instant"),
@@ -297,7 +304,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Reduce mic background noise", isOn: $draft.micNoiseSuppression)
                     .disabled(!draft.micEnabled)
-                caption("AI noise removal for your mic — fans, keyboard, room noise.")
+                caption("AI noise removal for your mic: fans, keyboard, room noise.")
             }
         }
     }
@@ -333,6 +340,18 @@ struct SettingsView: View {
                     Toggle("Play sound when a clip saves", isOn: $draftSaveSound)
                         .padding(.top, 6)
                     caption("The confirmation chime after a successful save.")
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Keep Rewinder in the Dock when the window closes", isOn: $draftCloseKeepsDock)
+                        .padding(.top, 6)
+                    caption("The close button never quits. When off, closing hides Rewinder in the menu bar.")
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Minimize when the replay buffer starts", isOn: $draftMinimizeOnBufferStart)
+                        .padding(.top, 6)
+                    caption("The buffer won't start on launch. Start it yourself and the window minimizes automatically.")
                 }
             }
         }
@@ -547,6 +566,10 @@ struct SettingsView: View {
         draft = defaults
         draftSaveSound = true
         saveSoundEnabled = true
+        draftCloseKeepsDock = true
+        closeKeepsDockIcon = true
+        draftMinimizeOnBufferStart = false
+        minimizeOnBufferStart = false
         engine.submitSettings(defaults)
     }
 
@@ -557,6 +580,8 @@ struct SettingsView: View {
         if didJustSave { return .saved }
         let engineClean = draft == engine.settings
         let appPrefsClean = draftSaveSound == saveSoundEnabled
+            && draftCloseKeepsDock == closeKeepsDockIcon
+            && draftMinimizeOnBufferStart == minimizeOnBufferStart
         return engineClean && appPrefsClean ? .clean : .dirty
     }
 
@@ -590,6 +615,8 @@ struct SettingsView: View {
     private var saveButton: some View {
         Button {
             saveSoundEnabled = draftSaveSound
+            closeKeepsDockIcon = draftCloseKeepsDock
+            minimizeOnBufferStart = draftMinimizeOnBufferStart
             engine.submitSettings(draft)
         } label: {
             saveButtonLabel
