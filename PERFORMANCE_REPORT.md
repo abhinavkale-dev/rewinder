@@ -4,6 +4,14 @@
 **Test machine:** Apple Silicon macOS (darwin 25.4.0), **64 GB RAM** → boots **1080p60** defaults
 **Test conditions:** machine heavily loaded during measurement (Cursor IDE, dev servers, measurement shells, plus Rewinder itself capturing the live screen at 60 fps with mic + RNNoise noise removal active). Treat capture‑stack CPU as an upper bound.
 
+> **Run this on your own Mac:** the numbers below are from one 64 GB machine. To measure yours (any RAM — 8/16/32/64 GB), launch Rewinder, turn the replay buffer on, then run:
+>
+> ```bash
+> bash scripts/measure_performance.sh
+> ```
+>
+> It samples the live processes for ~60 seconds and writes **`NEW_PERFORMANCE_REPORT.md`** with the same tables for your hardware.
+
 > TL;DR — The Tauri/WebView stack is **gone**. Rewinder is now a native SwiftUI app with the Rust engine statically linked in‑process (FFI), so the whole UI + engine costs **~33 MB** of real memory — the old build's WebView alone was ~105 MB. Total armed footprint at 1080p60 is **~150–260 MB** physical (dominated by ScreenCaptureKit's IOSurface pools, which vary with screen content), disk write is **~0.4–1.3 MB/s**, and the app process idles at ~0–1 % CPU. The old report's #1 gap — **no battery awareness** — is fixed: a battery guard now samples the power source and caps fps on battery (default 30), restoring quality on AC. Remaining structural inefficiency: the separate `ffmpeg` process for encode/mux/audio‑DSP.
 
 ---
