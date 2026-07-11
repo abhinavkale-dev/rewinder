@@ -1,0 +1,4 @@
+# Rewinder — never miss the moment.
+
+User-agent: *
+Allow: /

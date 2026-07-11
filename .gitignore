@@ -19,7 +19,9 @@ target/
 research/
 scripts/perf/
 
-web/
+# Local agent settings
+.claude/
+
 
 # Editor directories and files
 .vscode/*
