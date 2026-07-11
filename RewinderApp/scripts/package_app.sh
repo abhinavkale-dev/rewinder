@@ -34,6 +34,7 @@ else
 fi
 
 echo "==> Building Swift app ($MODE)"
+rm -f "$SWIFT_BIN"
 ( cd "$APP_DIR" && REWINDER_RUST_PROFILE="$MODE" swift build ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} )
 
 echo "==> Laying out app bundle"
