@@ -26,9 +26,13 @@ zip and return the artifacts it writes to `RewinderApp/dist/`:
 2. **macOS 26 (Tahoe)** — the app targets `.macOS(.v26)`.
 3. **Xcode 26** with command-line tools (Swift 6.2+): `swift --version`
 4. **Rust toolchain**: `cargo --version` (install via rustup if missing).
-5. Optional but recommended: `brew install create-dmg` — gives the DMG the
-   designed window (background art + Applications drop target). Without it the
-   script falls back to a plain `hdiutil` DMG that works but looks bare.
+5. **`brew install create-dmg` — required for the production DMG.** This gives
+   the DMG its designed installer window (background art + Applications drop
+   target, Retina-sharp). Without it the script silently falls back to a plain
+   `hdiutil` DMG: it still installs and notarizes, but users get a bare white
+   window. The first published build shipped that way, so don't skip this.
+   After the build, mount the DMG once and confirm you see the artwork with the
+   "© 2026 REWINDER" line fully visible at the bottom.
 
 ## One-time signing setup (required before the real run)
 

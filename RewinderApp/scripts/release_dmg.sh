@@ -97,14 +97,21 @@ fi
 echo "==> Building $DMG"
 if command -v create-dmg >/dev/null 2>&1; then
     BG_ARGS=()
-    [[ -f "$APP_DIR/Resources/dmg-background.png" ]] && \
+    # Prefer the multi-resolution tiff (1x + 2x) so the background renders
+    # sharp on Retina displays; fall back to the 1x png.
+    if [[ -f "$APP_DIR/Resources/dmg-background.tiff" ]]; then
+        BG_ARGS=(--background "$APP_DIR/Resources/dmg-background.tiff")
+    elif [[ -f "$APP_DIR/Resources/dmg-background.png" ]]; then
         BG_ARGS=(--background "$APP_DIR/Resources/dmg-background.png")
+    fi
     # Portrait Aside-style layout: app on top, Applications below, the
     # background's blue beam bridging the drag path between them. These
     # coordinates must match the slots painted in dmg-background.html.
+    # Window height = 640px background + 28px title bar (create-dmg window
+    # bounds include the title bar, which otherwise crops the bottom).
     create-dmg \
         --volname "Rewinder" \
-        --window-size 460 640 \
+        --window-size 460 668 \
         --icon-size 110 \
         --icon "Rewinder.app" 230 195 \
         --app-drop-link 230 450 \

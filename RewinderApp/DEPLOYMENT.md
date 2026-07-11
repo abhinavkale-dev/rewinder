@@ -15,9 +15,16 @@ Apple-Silicon Mac on macOS 26+ with no Gatekeeper warning.
 - An Apple-Silicon Mac, macOS 26 (Tahoe), Xcode 26 toolchain (Swift 6.2+).
 - Rust toolchain (`cargo`).
 - A paid **Apple Developer Program** membership ($99/yr).
-- `create-dmg` (`brew install create-dmg`) — optional but recommended: gives the
-  dmg its designed window (background art + Applications drop target). Without
-  it the script falls back to a plain `hdiutil` dmg, which works but looks bare.
+- `create-dmg` — **required for the production dmg**:
+  ```bash
+  brew install create-dmg
+  ```
+  This is what gives the dmg its designed installer window: the Rewinder icon,
+  the drag-to-Applications art (Retina-sharp), and the correct window size.
+  Without it the script silently falls back to a plain `hdiutil` dmg — it still
+  installs and notarizes fine, but users get a bare white Finder window instead
+  of the designed one. (This is exactly what happened to the first published
+  build, so don't skip it.)
 
 ## One-time setup
 
@@ -49,8 +56,18 @@ That's it. The script:
    libraries (`scripts/verify_ffmpeg.sh`).
 2. Builds + signs the app (`scripts/package_app.sh`) with hardened runtime +
    secure timestamp, and checks `get-task-allow` is absent.
-3. Notarizes + staples the app, builds the dmg, signs + notarizes + staples it.
+3. Notarizes + staples the app, then builds the dmg with the designed installer
+   window (`create-dmg` + `Resources/dmg-background.tiff`, a 1x + 2x
+   multi-resolution image so the art is Retina-sharp), and signs + notarizes +
+   staples the dmg too.
 4. Prints the Gatekeeper assessment and SHA-256.
+
+Before handing the dmg out, sanity-check it once: mount it and confirm the
+window shows the background art with the full "© 2026 REWINDER" line visible at
+the bottom, then:
+```bash
+spctl -a -vv -t install dist/Rewinder-*.dmg   # must say "accepted · Notarized Developer ID"
+```
 
 Useful overrides:
 
