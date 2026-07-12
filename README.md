@@ -1,65 +1,87 @@
-# Rewinder (native SwiftUI + Rust engine)
+<p align="center">
+  <img src="assets/rewinder-owl.svg" width="120" alt="Rewinder owl logo" />
+</p>
 
-Rewinder is a macOS rolling-replay recorder. The UI is a native SwiftUI app that
-adopts Apple's **Liquid Glass** material; it drives a shared Rust capture engine
-linked in as a C-ABI static library. (The previous Tauri + React shell has been
-removed — the Rust engine crate lives on under `src-tauri/`.)
+<h1 align="center">Rewinder</h1>
+
+<p align="center">
+  Rewind your screen. Save the moment with a hotkey.<br />
+  A native macOS rolling-replay recorder, like ShadowPlay for the Mac.
+</p>
+
+<p align="center">
+  <a href="https://github.com/abhinavkale-dev/rewinder/releases/latest"><b>Download the latest DMG</b></a>
+</p>
+
+---
+
+Rewinder keeps a rolling buffer of the last few seconds of your screen, system audio, and mic. Nothing is written to disk while you work. When something worth keeping happens, press the hotkey and the buffer is saved as an MP4. Miss nothing, record nothing you don't ask for.
+
+## Features
+
+- **Rolling replay buffer**: 15 / 30 / 60 / 90 / 120 seconds, kept in memory until you save.
+- **One hotkey to save**: `Ctrl+Option+R` by default, recordable to anything you like in Settings.
+- **System audio + microphone**, mixed into the clip. AI noise removal (RNNoise) cleans up fans, keyboards, and room noise from your mic.
+- **Echo-safe audio routing**: on speakers, Rewinder picks an echo-cancelling mic backend so your clip never doubles the sound. On headphones it switches to a raw backend so your system audio is never ducked. It re-picks automatically when you plug or unplug.
+- **Adaptive quality guard**: lowers fps under heavy system load or thermal pressure and restores it when things calm down.
+- **Battery guard**: caps fps on battery (30 by default), back to full quality on AC.
+- **Native and light**: SwiftUI app with the Rust engine statically linked in-process. No Electron, no WebView. See [PERFORMANCE_REPORT.md](PERFORMANCE_REPORT.md) for measurements.
+- **Menu bar resident**: close the window and Rewinder stays armed in the menu bar. Quality (720p/1080p, 30/60 fps), buffer length, sounds, and window behavior are all in Settings.
+
+Clips land in `~/Downloads/Rewinder` by default (configurable).
+
+## Requirements
+
+- Apple Silicon Mac
+- macOS 26 (Tahoe)
+
+The released app is Developer ID signed and notarized by Apple, so it installs with no Gatekeeper warnings: download the DMG, open it, drag Rewinder into Applications.
+
+## How it works
 
 ```
-SwiftUI glass UI (RewinderApp)  ──C ABI FFI──►  ffi.rs ──►  Engine (Rust)
-                                                              │
-                                                   sck_capture helper + ffmpeg
+SwiftUI app (RewinderApp)  ──C ABI FFI──►  Rust engine (src-tauri/)
+                                                │
+                                 rewinder-sck-capture (ScreenCaptureKit helper)
+                                                │
+                                          ffmpeg (encode + mux)
 ```
 
-## Run as a desktop app (development)
+- **`RewinderApp/`**: the native SwiftUI app (UI, onboarding, settings, hotkeys, menu bar). Links the Rust engine as a C-ABI static library.
+- **`src-tauri/`**: the Rust engine crate (capture orchestration, replay buffer, save pipeline, adaptive guards, settings). The folder name is a leftover from the project's Tauri origins; the Tauri shell itself is long gone.
+- **`src-tauri/native/sck_capture/`**: a small Swift helper binary that talks to ScreenCaptureKit and CoreAudio (capture, mic backends, audio route watching).
+- **`web/`**: the Next.js landing page.
 
-The Swift package links `src-tauri/target/debug/librewinder_lib.a`, so build the
-Rust lib first, then run from inside `RewinderApp/`:
+## Build from source
+
+Prerequisites: Xcode 26 toolchain (Swift 6.2+) and a Rust toolchain.
+
+Run in development:
 
 ```bash
 cd src-tauri && cargo build --lib && cd ..
 cd RewinderApp && swift run
 ```
 
-## Build a packaged `.app`
+Build a packaged app:
 
 ```bash
 cd RewinderApp
-scripts/package_app.sh            # release (default) -> RewinderApp/build/Rewinder.app
+scripts/package_app.sh            # release build -> RewinderApp/build/Rewinder.app
 scripts/package_app.sh --debug    # faster debug build
 ```
 
-This builds the static lib + Swift binary, bundles
-`Contents/Resources/bin/{rewinder-sck-capture,ffmpeg,ffprobe}`, and ad-hoc signs
-with `Resources/Rewinder.entitlements`. See [`RewinderApp/README.md`](RewinderApp/README.md)
-for architecture, prerequisites, and Developer-ID signing / notarization steps.
+This builds the Rust static lib and the Swift binary, bundles the capture helper plus a static `ffmpeg`/`ffprobe`, and signs the app. See [RewinderApp/README.md](RewinderApp/README.md) for architecture details.
 
-## Notes
+To produce a signed, notarized, distributable DMG, see [RewinderApp/DEPLOYMENT.md](RewinderApp/DEPLOYMENT.md) (requires an Apple Developer Program membership).
 
-- Global hotkey default: `Ctrl+Option+R`
-- Live capture is armed whenever replay is enabled; the rolling buffer holds the
-  last N seconds (configurable in Settings).
-- Closing the window keeps Rewinder armed in the menu bar; use the tray
-  `Quit Rewinder` to exit fully (which stops capture and all helper processes).
-- Replay clips are saved to the configured output directory.
-- If no loopback audio device (BlackHole/Loopback/Soundflower) is present, capture
-  runs video-only.
-- Lean rust-analyzer defaults for the engine crate live in
-  [`.vscode/settings.json`](.vscode/settings.json).
+## Troubleshooting
 
-## Troubleshooting: Stale macOS Capture Indicator
-
-If macOS still shows a capture indicator after you stopped replay, run this
-operator cleanup:
+**macOS still shows the capture indicator after quitting.** Kill any stray capture workers and reset the menu bar UI:
 
 ```bash
-pkill -f "rewinder-sck-capture|ffmpeg.*\.rewinder-live|ffmpeg.*video\.pipe|ffmpeg.*system_audio\.pipe|ffmpeg.*mic_audio\.pipe"
+pkill -f "rewinder-sck-capture|ffmpeg.*\.rewinder-live"
 killall ControlCenter
-killall SystemUIServer
 ```
 
-Then reopen Control Center and verify the capture tile is gone.
-
-If the indicator still appears after Rewinder is fully exited and no capture
-workers remain, treat that as macOS UI state and reset Control Center or sign
-out/in rather than changing Rewinder behavior again.
+If the indicator persists with no Rewinder processes running, it is stale macOS UI state; it clears on sign out/in.
