@@ -39,13 +39,9 @@ The released app is Developer ID signed and notarized by Apple, so it installs w
 
 ## How it works
 
-```
-SwiftUI app (RewinderApp)  ──C ABI FFI──►  Rust engine (src-tauri/)
-                                                │
-                                 rewinder-sck-capture (ScreenCaptureKit helper)
-                                                │
-                                          ffmpeg (encode + mux)
-```
+<p align="center">
+  <img src="assets/architecture.png" width="820" alt="Rewinder architecture: the SwiftUI app talks to the Rust engine over C FFI; the engine spawns the ScreenCaptureKit helper and ffmpeg, which feed a rolling ring buffer of 0.5s segments; pressing the hotkey saves the last 30 seconds as an MP4 into ~/Downloads/Rewinder" />
+</p>
 
 - **`RewinderApp/`**: the native SwiftUI app (UI, onboarding, settings, hotkeys, menu bar). Links the Rust engine as a C-ABI static library.
 - **`src-tauri/`**: the Rust engine crate (capture orchestration, replay buffer, save pipeline, adaptive guards, settings). The folder name is a leftover from the project's Tauri origins; the Tauri shell itself is long gone.
@@ -73,7 +69,12 @@ scripts/package_app.sh --debug    # faster debug build
 
 This builds the Rust static lib and the Swift binary, bundles the capture helper plus a static `ffmpeg`/`ffprobe`, and signs the app. See [RewinderApp/README.md](RewinderApp/README.md) for architecture details.
 
-To produce a signed, notarized, distributable DMG, see [RewinderApp/DEPLOYMENT.md](RewinderApp/DEPLOYMENT.md) (requires an Apple Developer Program membership).
+To produce a signed, notarized, distributable DMG (requires an Apple Developer Program membership):
+
+```bash
+cd RewinderApp
+scripts/release_dmg.sh            # -> dist/Rewinder-<version>.dmg (signed + notarized + stapled)
+```
 
 ## Troubleshooting
 

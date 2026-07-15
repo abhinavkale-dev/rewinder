@@ -73,7 +73,7 @@ If `ffmpeg` isn't on `PATH`, set `REWINDER_FFMPEG_DIR` to a folder containing
 ## Distribute a .dmg
 
 The full release pipeline (Developer ID signing, notarization, stapling, dmg)
-is automated — see **[DEPLOYMENT.md](DEPLOYMENT.md)**. Short version:
+is automated:
 
 ```bash
 scripts/release_dmg.sh          # -> dist/Rewinder-<version>.dmg (signed + notarized + stapled)

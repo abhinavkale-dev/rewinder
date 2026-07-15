@@ -131,9 +131,9 @@ if [[ -z "$SIGN_ID" ]]; then
     SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
         | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')"
 fi
-# Local fallback: the self-signed "Rewinder Dev" cert (see DEPLOYMENT.md). Not
-# distributable, but stable — so TCC permission grants survive rebuilds even
-# without an Apple identity on the machine.
+# Local fallback: a self-signed "Rewinder Dev" cert (create one in Keychain
+# Access as a code-signing certificate). Not distributable, but stable — so TCC
+# permission grants survive rebuilds even without an Apple identity.
 if [[ -z "$SIGN_ID" ]]; then
     SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
         | awk -F'"' '/Rewinder Dev/ {print $2; exit}')"

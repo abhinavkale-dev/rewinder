@@ -7,9 +7,9 @@
 # volume/amix/aresample/setpts) — all present in a standard static build.
 #
 # The default build is the prebuilt arm64 static release from
-# eugeneware/ffmpeg-static (a GPL build — see DEPLOYMENT.md for the
-# corresponding-source obligation). Override the URLs to point at your own
-# (e.g. LGPL) build:
+# eugeneware/ffmpeg-static (a GPL build; shipping it means the release must
+# link to ffmpeg's corresponding source). Override the URLs to point at your
+# own (e.g. LGPL) build:
 #
 #   REWINDER_FFMPEG_URL=...  REWINDER_FFPROBE_URL=...  scripts/fetch_ffmpeg.sh
 #   scripts/fetch_ffmpeg.sh --force     # re-download even if present
